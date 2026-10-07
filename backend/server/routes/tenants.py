@@ -178,3 +178,43 @@ def update_tenant(tenant_id):
 
     db.session.commit()
     return {"message": "Tenant updated", "tenant": tenant.to_dict()}, 200
+
+
+def tenant_has_leases(tenant):
+    """True if a lease points at this tenant.
+
+    The Lease model lives in David's branch. Until it is merged there is
+    nothing to check, so this returns False when the model does not exist.
+    """
+    lease_model = db.Model.registry._class_registry.get("Lease")
+    if lease_model is None:
+        return False
+    return (
+        db.session.query(lease_model.id)
+        .filter(lease_model.tenant_id == tenant.id)
+        .first()
+        is not None
+    )
+
+
+@tenants_bp.route("/<int:tenant_id>", methods=["DELETE"])
+def delete_tenant(tenant_id):
+    user = current_user()
+    if not user:
+        return error("User not found", 404)
+    if user.role not in MANAGER_ROLES:
+        return error("You do not have permission to access this resource", 403)
+
+    tenant = get_visible_tenant(user, tenant_id)
+    if not tenant:
+        return error("Tenant not found", 404)
+
+    if tenant_has_leases(tenant):
+        return error(
+            "This tenant has leases and cannot be deleted. End or remove the leases first.",
+            409,
+        )
+
+    db.session.delete(tenant)
+    db.session.commit()
+    return {"message": "Tenant deleted"}, 200

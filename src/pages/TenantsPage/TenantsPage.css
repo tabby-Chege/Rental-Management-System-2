@@ -1,0 +1,108 @@
+.tenants-page {
+  display: grid;
+  gap: 20px;
+  max-width: 820px;
+  margin: 0 auto;
+  padding: 32px clamp(16px, 4vw, 32px);
+}
+
+.tenants-page h1,
+.tenants-page h2 {
+  margin: 0;
+}
+
+.tenants-card {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 18px 20px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+}
+
+.tenants-card p {
+  margin: 4px 0 0;
+  color: var(--muted);
+}
+
+.tenants-page .tenants-card:has(.tenant-form) {
+  display: block;
+}
+
+.tenant-list {
+  display: grid;
+  gap: 12px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.tenant-form {
+  display: grid;
+  gap: 14px;
+  width: 100%;
+  margin-top: 12px;
+}
+
+.tenant-field {
+  display: grid;
+  gap: 6px;
+  font-weight: 600;
+}
+
+.tenant-field input {
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font-weight: 400;
+}
+
+.tenant-field input[aria-invalid="true"] {
+  border-color: #b3261e;
+}
+
+.tenant-form-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.tenant-button {
+  padding: 9px 16px;
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  background: var(--accent);
+  color: #fff;
+  cursor: pointer;
+}
+
+.tenant-button:hover:not(:disabled) {
+  background: var(--accent-hover);
+}
+
+.tenant-button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.tenant-button.is-secondary {
+  background: var(--surface);
+  color: var(--accent);
+}
+
+.tenant-button.is-danger {
+  border-color: #b3261e;
+  background: var(--surface);
+  color: #b3261e;
+}
+
+.tenants-status {
+  color: var(--muted);
+}
+
+.tenants-error {
+  color: #b3261e;
+}
