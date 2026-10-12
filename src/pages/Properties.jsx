@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { searchProperties } from "../rentcastApi";
 import { CITIES } from "../cities";
-import PropertyCard from "../components/PropertyCard";
+import PropertyCard from "../Components/PropertyCard";
 
 function Properties() {
   // Controlled <select>: holds the label of the chosen city
