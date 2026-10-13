@@ -31,3 +31,39 @@ class User(db.Model):
             "role": self.role,
             "created_at": self.created_at.isoformat(),
         }
+
+
+class Property(db.Model):
+    __tablename__ = "properties"
+
+    id = db.Column(db.Integer, primary_key=True)
+    owner_id = db.Column(
+        db.Integer,
+        db.ForeignKey("users.id"),
+        nullable=False,
+        index=True,
+    )
+    name = db.Column(db.String(120), nullable=False)
+    address = db.Column(db.String(255), nullable=False)
+    city = db.Column(db.String(100), nullable=False)
+    state = db.Column(db.String(100), nullable=False)
+    zip_code = db.Column(db.String(20))
+    description = db.Column(db.Text)
+    created_at = db.Column(
+        db.DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "owner_id": self.owner_id,
+            "name": self.name,
+            "address": self.address,
+            "city": self.city,
+            "state": self.state,
+            "zip_code": self.zip_code,
+            "description": self.description,
+            "created_at": self.created_at.isoformat(),
+        }
