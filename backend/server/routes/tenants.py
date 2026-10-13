@@ -1,5 +1,6 @@
 from flask import Blueprint, request
 from flask_jwt_extended import get_jwt_identity, verify_jwt_in_request
+from sqlalchemy import inspect, text
 
 from server.extensions import db
 from server.models import User
@@ -181,20 +182,13 @@ def update_tenant(tenant_id):
 
 
 def tenant_has_leases(tenant):
-    """True if a lease points at this tenant.
-
-    The Lease model lives in David's branch. Until it is merged there is
-    nothing to check, so this returns False when the model does not exist.
-    """
-    lease_model = db.Model.registry._class_registry.get("Lease")
-    if lease_model is None:
+    """Check for leases without requiring the optional leases module to load."""
+    if not inspect(db.engine).has_table("leases"):
         return False
-    return (
-        db.session.query(lease_model.id)
-        .filter(lease_model.tenant_id == tenant.id)
-        .first()
-        is not None
-    )
+    return db.session.execute(
+        text("SELECT 1 FROM leases WHERE tenant_id = :tenant_id LIMIT 1"),
+        {"tenant_id": tenant.id},
+    ).first() is not None
 
 
 @tenants_bp.route("/<int:tenant_id>", methods=["DELETE"])

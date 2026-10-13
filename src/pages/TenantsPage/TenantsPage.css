@@ -11,6 +11,13 @@
   margin: 0;
 }
 
+.tenants-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
 .tenants-card {
   display: flex;
   flex-wrap: wrap;

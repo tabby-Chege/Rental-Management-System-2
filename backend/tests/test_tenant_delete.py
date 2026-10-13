@@ -1,6 +1,8 @@
-from tests.test_tenants import client, world, create  # noqa: F401  (fixtures + helper)
+from datetime import date
 
+from tests.test_tenants import client, world, create  # noqa: F401  (fixtures + helper)
 from server.extensions import db
+from server.models import Lease, Property, Unit
 
 
 def test_landlord_deletes_own_tenant(client, world):
@@ -30,19 +32,29 @@ def test_delete_requires_login(client):
 
 
 def test_delete_blocked_when_tenant_has_leases(client, world):
-    # Stand-in for David's Lease model, so the 409 path is exercised.
-    if "Lease" not in db.Model.registry._class_registry:
-        class Lease(db.Model):
-            __tablename__ = "leases"
-            id = db.Column(db.Integer, primary_key=True)
-            tenant_id = db.Column(db.Integer, db.ForeignKey("tenants.id"), nullable=False)
-
-        db.create_all()
-    from server.routes.tenants import tenant_has_leases  # noqa: F401
-
     tid = create(client, world["landlord"]).get_json()["tenant"]["id"]
-    lease_model = db.Model.registry._class_registry["Lease"]
-    db.session.add(lease_model(tenant_id=tid))
+    property_item = Property(
+        owner_id=world["ids"]["landlord"],
+        name="Test Property",
+        address="1 Main Street",
+        city="Nairobi",
+        state="Nairobi",
+    )
+    db.session.add(property_item)
+    db.session.flush()
+    unit = Unit(unit_number="A1", property_id=property_item.id, rent_amount=1200)
+    db.session.add(unit)
+    db.session.flush()
+    db.session.add(
+        Lease(
+            unit_id=unit.id,
+            tenant_id=tid,
+            start_date=date(2026, 1, 1),
+            end_date=date(2026, 12, 31),
+            monthly_rent=1200,
+            deposit=500,
+        )
+    )
     db.session.commit()
 
     res = client.delete(f"/api/tenants/{tid}", headers=world["landlord"])

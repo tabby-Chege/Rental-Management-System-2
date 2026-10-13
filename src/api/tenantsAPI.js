@@ -1,14 +1,23 @@
 const BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:5000";
 // Tabby's login flow should store the JWT under this key.
 export const TOKEN_KEY = "access_token";
+export const SESSION_EXPIRED_EVENT = "tenant-session-expired";
 
 export function getToken() {
   return localStorage.getItem(TOKEN_KEY);
 }
 
-async function request(path, options = {}) {
+export function setToken(token) {
+  localStorage.setItem(TOKEN_KEY, token);
+}
+
+export function clearToken() {
+  localStorage.removeItem(TOKEN_KEY);
+}
+
+async function request(path, options = {}, requiresAuth = true) {
   const token = getToken();
-  if (!token) throw new Error("Please log in to continue.");
+  if (requiresAuth && !token) throw new Error("Please log in to continue.");
 
   let res;
   try {
@@ -16,7 +25,7 @@ async function request(path, options = {}) {
       ...options,
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${token}`,
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
         ...options.headers,
       },
     });
@@ -32,13 +41,25 @@ async function request(path, options = {}) {
   }
 
   if (!res.ok) {
-    if (res.status === 401 || res.status === 422) {
+    if (requiresAuth && (res.status === 401 || res.status === 422)) {
+      clearToken();
+      window.dispatchEvent(new Event(SESSION_EXPIRED_EVENT));
       throw new Error("Your session has expired. Please log in again.");
     }
     throw new Error(data.error || `Request failed (${res.status}).`);
   }
   return data;
 }
+
+export const login = (email, password) =>
+  request(
+    "/api/auth/login",
+    { method: "POST", body: JSON.stringify({ email, password }) },
+    false,
+  ).then((data) => {
+    setToken(data.access_token);
+    return data.user;
+  });
 
 export const getCurrentUser = () => request("/api/auth/me").then((d) => d.user);
 export const listTenants = () => request("/api/tenants").then((d) => d.tenants);

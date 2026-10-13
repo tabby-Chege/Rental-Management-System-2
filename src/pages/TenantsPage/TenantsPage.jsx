@@ -1,11 +1,14 @@
 import { useEffect, useState } from "react";
 import {
   createTenant,
+  clearToken,
   deleteTenant,
   getCurrentUser,
   getMyTenant,
   getToken,
+  login,
   listTenants,
+  SESSION_EXPIRED_EVENT,
   updateTenant,
 } from "../../api/tenantsAPI";
 import { validateTenantForm } from "../../utils/tenantForm";
@@ -20,10 +23,18 @@ function TenantsPage() {
   const [error, setError] = useState("");
 
   useEffect(() => {
+    function handleSessionExpired() {
+      setUser(null);
+      setError("Your session has expired. Please log in again.");
+    }
+    window.addEventListener(SESSION_EXPIRED_EVENT, handleSessionExpired);
+    return () => window.removeEventListener(SESSION_EXPIRED_EVENT, handleSessionExpired);
+  }, []);
+
+  useEffect(() => {
     let ignore = false;
     async function load() {
       if (!getToken()) {
-        setError("Please log in to view tenant information.");
         setIsLoading(false);
         return;
       }
@@ -43,9 +54,74 @@ function TenantsPage() {
   }, []);
 
   if (isLoading) return <p className="tenants-status">Loading…</p>;
-  if (error) return <p className="tenants-status tenants-error" role="alert">{error}</p>;
-  if (MANAGER_ROLES.includes(user.role)) return <ManagerView />;
-  return <TenantView />;
+  if (!user) return <LoginView message={error} onLogin={setUser} />;
+
+  function handleLogout() {
+    clearToken();
+    setUser(null);
+    setError("");
+  }
+
+  if (MANAGER_ROLES.includes(user.role)) return <ManagerView onLogout={handleLogout} />;
+  return <TenantView onLogout={handleLogout} />;
+}
+
+function LoginView({ message, onLogin }) {
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [submitError, setSubmitError] = useState("");
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  async function handleSubmit(event) {
+    event.preventDefault();
+    setSubmitError("");
+    setIsSubmitting(true);
+    try {
+      onLogin(await login(email.trim(), password));
+    } catch (err) {
+      setSubmitError(err.message);
+    } finally {
+      setIsSubmitting(false);
+    }
+  }
+
+  return (
+    <section className="tenants-page">
+      <h1>Tenants</h1>
+      <div className="tenants-card">
+        <h2>Log in to manage tenant details</h2>
+        {message && <p className="tenants-error" role="alert">{message}</p>}
+        {submitError && <p className="tenants-error" role="alert">{submitError}</p>}
+        <form className="tenant-form" onSubmit={handleSubmit}>
+          <label className="tenant-field">
+            <span>Email</span>
+            <input
+              type="email"
+              autoComplete="username"
+              value={email}
+              onChange={(event) => setEmail(event.target.value)}
+              required
+            />
+          </label>
+          <label className="tenant-field">
+            <span>Password</span>
+            <input
+              type="password"
+              autoComplete="current-password"
+              value={password}
+              onChange={(event) => setPassword(event.target.value)}
+              required
+            />
+          </label>
+          <div className="tenant-form-actions">
+            <button className="tenant-button" type="submit" disabled={isSubmitting}>
+              {isSubmitting ? "Logging in…" : "Log in"}
+            </button>
+          </div>
+        </form>
+      </div>
+    </section>
+  );
 }
 
 function TenantForm({ initial, onSubmit, onCancel, submitLabel, fields, requireName }) {
@@ -112,7 +188,7 @@ function TenantForm({ initial, onSubmit, onCancel, submitLabel, fields, requireN
   );
 }
 
-function ManagerView() {
+function ManagerView({ onLogout }) {
   const [tenants, setTenants] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState("");
@@ -160,7 +236,10 @@ function ManagerView() {
 
   return (
     <section className="tenants-page">
-      <h1>Tenants</h1>
+      <div className="tenants-heading">
+        <h1>Tenants</h1>
+        <button className="tenant-button is-secondary" onClick={onLogout}>Log out</button>
+      </div>
 
       <div className="tenants-card">
         <h2>Add a tenant</h2>
@@ -215,7 +294,7 @@ function ManagerView() {
   );
 }
 
-function TenantView() {
+function TenantView({ onLogout }) {
   const [tenant, setTenant] = useState(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState("");
@@ -250,7 +329,10 @@ function TenantView() {
 
   return (
     <section className="tenants-page">
-      <h1>My details</h1>
+      <div className="tenants-heading">
+        <h1>My details</h1>
+        <button className="tenant-button is-secondary" onClick={onLogout}>Log out</button>
+      </div>
       <div className="tenants-card">
         <p><strong>{tenant.name}</strong></p>
         <p className="tenants-status">Your landlord manages your name. You can update your contact details below.</p>
