@@ -5,6 +5,7 @@ from sqlalchemy import inspect, text
 from server.extensions import db
 from server.models import User
 from server.models_tenant import Tenant
+from server.pagination import get_pagination, pagination_metadata
 
 tenants_bp = Blueprint("tenants", __name__, url_prefix="/api/tenants")
 
@@ -24,7 +25,9 @@ def current_user():
 
 
 def clean_email(value):
-    email = (value or "").strip().lower()
+    if not isinstance(value, str):
+        return None
+    email = value.strip().lower()
     if "@" not in email or "." not in email.split("@")[-1]:
         return None
     return email
@@ -34,7 +37,11 @@ def validate_user_link(user_id, tenant=None):
     """Return an error response if user_id cannot be linked, else None."""
     if user_id is None:
         return None
-    linked = db.session.get(User, user_id) if isinstance(user_id, int) else None
+    linked = (
+        db.session.get(User, user_id)
+        if isinstance(user_id, int) and not isinstance(user_id, bool)
+        else None
+    )
     if not linked or linked.role != "tenant":
         return error("user_id must belong to an existing user with the tenant role", 400)
     taken = Tenant.query.filter_by(user_id=user_id).first()
@@ -63,8 +70,20 @@ def list_tenants():
     if user.role not in MANAGER_ROLES:
         return error("You do not have permission to access this resource", 403)
 
-    tenants = Tenant.query.filter_by(landlord_id=user.id).order_by(Tenant.name).all()
-    return {"tenants": [t.to_dict() for t in tenants]}, 200
+    pagination, pagination_error = get_pagination()
+    if pagination_error:
+        return error(pagination_error, 400)
+
+    page, per_page = pagination
+    result = (
+        Tenant.query.filter_by(landlord_id=user.id)
+        .order_by(Tenant.name, Tenant.id)
+        .paginate(page=page, per_page=per_page, error_out=False)
+    )
+    return {
+        "tenants": [tenant.to_dict() for tenant in result.items],
+        "pagination": pagination_metadata(result),
+    }, 200
 
 
 @tenants_bp.route("", methods=["POST"])
@@ -79,15 +98,23 @@ def create_tenant():
     if not isinstance(data, dict):
         return error("Request body must be valid JSON", 400)
 
-    name = (data.get("name") or "").strip()
+    raw_name = data.get("name")
+    if not isinstance(raw_name, str):
+        return error("Name is required", 400)
+    name = raw_name.strip()
     email = clean_email(data.get("email"))
-    phone = (data.get("phone") or "").strip() or None
+    raw_phone = data.get("phone")
+    if raw_phone is not None and not isinstance(raw_phone, str):
+        return error("Phone must be text", 400)
+    phone = (raw_phone or "").strip() or None
     user_id = data.get("user_id")
 
     if not name:
         return error("Name is required", 400)
     if not email:
         return error("A valid email address is required", 400)
+    if len(name) > 120 or len(email) > 120 or (phone and len(phone) > 30):
+        return error("Name, email, or phone exceeds the maximum length", 400)
     if Tenant.query.filter_by(landlord_id=user.id, email=email).first():
         return error("You already have a tenant with this email", 409)
 
@@ -152,15 +179,21 @@ def update_tenant(tenant_id):
         )
 
     if "name" in data:
-        name = (data["name"] or "").strip()
+        if not isinstance(data["name"], str):
+            return error("Name must be text", 400)
+        name = data["name"].strip()
         if not name:
             return error("Name cannot be empty", 400)
+        if len(name) > 120:
+            return error("Name is too long", 400)
         tenant.name = name
 
     if "email" in data:
         email = clean_email(data["email"])
         if not email:
             return error("A valid email address is required", 400)
+        if len(email) > 120:
+            return error("Email is too long", 400)
         duplicate = Tenant.query.filter_by(
             landlord_id=tenant.landlord_id, email=email
         ).first()
@@ -169,7 +202,12 @@ def update_tenant(tenant_id):
         tenant.email = email
 
     if "phone" in data:
-        tenant.phone = (data["phone"] or "").strip() or None
+        if data["phone"] is not None and not isinstance(data["phone"], str):
+            return error("Phone must be text", 400)
+        phone = (data["phone"] or "").strip() or None
+        if phone and len(phone) > 30:
+            return error("Phone is too long", 400)
+        tenant.phone = phone
 
     if "user_id" in data:
         problem = validate_user_link(data["user_id"], tenant)

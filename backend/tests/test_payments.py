@@ -154,7 +154,7 @@ def test_landlord_sees_only_payments_for_own_properties(client, world):
     response = client.get("/payments", headers=world["landlord"])
 
     assert response.status_code == 200
-    payment_ids = {payment["id"] for payment in response.get_json()}
+    payment_ids = {payment["id"] for payment in response.get_json()["payments"]}
     assert own_payment_id in payment_ids
     assert len(payment_ids) == 1
 
@@ -174,7 +174,7 @@ def test_tenant_sees_only_payments_for_own_leases(client, world):
     response = client.get("/payments", headers=world["tenant"])
 
     assert response.status_code == 200
-    payment_ids = {payment["id"] for payment in response.get_json()}
+    payment_ids = {payment["id"] for payment in response.get_json()["payments"]}
     assert own_payment_id in payment_ids
     assert len(payment_ids) == 1
 
@@ -193,3 +193,54 @@ def test_payment_validation_rejects_invalid_amount(client, world):
     )
 
     assert response.status_code == 400
+
+
+def test_payment_list_is_paginated(client, world):
+    lease_id = make_lease(client, world)
+    add_payment(lease_id, "PAGE-001")
+    add_payment(lease_id, "PAGE-002")
+
+    response = client.get(
+        "/payments?page=2&per_page=1", headers=world["landlord"]
+    )
+    assert response.status_code == 200
+    data = response.get_json()
+    assert len(data["payments"]) == 1
+    assert data["pagination"]["page"] == 2
+    assert data["pagination"]["total"] == 2
+
+
+def test_lease_records_cannot_be_managed_by_another_landlord(client, world):
+    own_lease_id = make_lease(client, world)
+    other_lease_id = make_lease(
+        client,
+        world,
+        owner_key="other",
+        tenant_key="tenant_user2",
+    )
+
+    own_lease = db.session.get(Lease, own_lease_id)
+    other_lease = db.session.get(Lease, other_lease_id)
+    cross_owner = client.post(
+        "/api/leases",
+        headers=world["landlord"],
+        json={
+            "unit_id": own_lease.unit_id,
+            "tenant_id": other_lease.tenant_id,
+            "start_date": date.today().isoformat(),
+            "end_date": (date.today() + timedelta(days=30)).isoformat(),
+            "monthly_rent": 1000,
+            "deposit_amount": 0,
+        },
+    )
+    assert cross_owner.status_code == 404
+
+    assert client.delete(
+        f"/api/leases/{other_lease_id}", headers=world["landlord"]
+    ).status_code == 404
+    assert client.delete(
+        f"/api/leases/{own_lease_id}", headers=world["tenant"]
+    ).status_code == 403
+    assert client.delete(
+        f"/api/leases/{own_lease_id}", headers=world["landlord"]
+    ).status_code == 200

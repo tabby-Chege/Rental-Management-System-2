@@ -135,6 +135,11 @@
   font-size: 1.05rem;
 }
 
+.manage-item h2 {
+  margin: 0 0 4px;
+  font-size: 1.05rem;
+}
+
 .manage-item p {
   margin: 0;
   color: var(--muted);
@@ -142,6 +147,33 @@
 
 .manage-item-description {
   margin-top: 6px !important;
+}
+
+.pagination-controls {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 14px;
+  margin: 24px 0;
+}
+
+.pagination-controls button {
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--ink);
+  cursor: pointer;
+}
+
+.pagination-controls button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.pagination-controls span {
+  color: var(--muted);
+  font-size: 0.9rem;
 }
 
 @media (max-width: 640px) {

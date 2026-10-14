@@ -28,6 +28,7 @@
   font-weight: 600;
 }
 
+.search-location input,
 .search-location select {
   min-width: 180px;
   padding: 9px 12px;
@@ -38,6 +39,7 @@
   font: inherit;
 }
 
+.search-location input:focus-visible,
 .search-location select:focus-visible,
 .error-message button:focus-visible {
   outline: 3px solid rgba(74, 144, 226, 0.35);
@@ -90,9 +92,36 @@
     gap: 6px;
   }
 
+  .search-location input,
   .search-location select {
     width: 100%;
   }
+}
+
+.pagination-controls {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 14px;
+  margin: 24px 0;
+}
+
+.pagination-controls button {
+  padding: 8px 12px;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  background: #fff;
+  cursor: pointer;
+}
+
+.pagination-controls button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.pagination-controls span {
+  color: #6b7280;
+  font-size: 14px;
 }
 
 /* Filter panel */

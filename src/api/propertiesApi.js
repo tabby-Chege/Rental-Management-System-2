@@ -1,26 +1,13 @@
-// Talks to OUR Flask backend (not RentCast). Requests go to /api/..., which the
-// Vite dev server proxies to Flask (see vite.config.js).
-
-// Tabby's login page must save the JWT under this exact key after login:
-//   localStorage.setItem("access_token", data.access_token)
-export const TOKEN_KEY = "access_token";
-
-export function getToken() {
-  try {
-    return localStorage.getItem(TOKEN_KEY);
-  } catch {
-    return null;
-  }
-}
+import { getToken } from "./authAPI.js";
 
 async function request(path, options = {}) {
   const token = getToken();
-
   const response = await fetch(`/api/properties${path}`, {
     ...options,
     headers: {
       "Content-Type": "application/json",
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...options.headers,
     },
   });
 
@@ -28,11 +15,10 @@ async function request(path, options = {}) {
   try {
     body = await response.json();
   } catch {
-    // response had no JSON body
+    // Some successful responses, such as DELETE, may not include JSON.
   }
 
   if (!response.ok) {
-    // Our routes send {error}; flask-jwt-extended sends {msg} for token problems.
     const error = new Error(
       body?.error || body?.msg || `Request failed (${response.status})`
     );
@@ -43,9 +29,25 @@ async function request(path, options = {}) {
   return body;
 }
 
-export async function listProperties() {
-  const data = await request("");
-  return data.properties;
+export function listProperties({
+  page = 1,
+  perPage = 10,
+  q = "",
+  city = "",
+} = {}) {
+  const params = new URLSearchParams({
+    page: String(page),
+    per_page: String(perPage),
+  });
+  if (q.trim()) params.set("q", q.trim());
+  if (city.trim()) params.set("city", city.trim());
+
+  return request(`?${params.toString()}`);
+}
+
+export async function getProperty(id) {
+  const data = await request(`/${encodeURIComponent(id)}`);
+  return data.property;
 }
 
 export async function createProperty(values) {
@@ -57,7 +59,7 @@ export async function createProperty(values) {
 }
 
 export async function updateProperty(id, values) {
-  const data = await request(`/${id}`, {
+  const data = await request(`/${encodeURIComponent(id)}`, {
     method: "PUT",
     body: JSON.stringify(values),
   });
@@ -65,5 +67,5 @@ export async function updateProperty(id, values) {
 }
 
 export async function deleteProperty(id) {
-  await request(`/${id}`, { method: "DELETE" });
+  return request(`/${encodeURIComponent(id)}`, { method: "DELETE" });
 }

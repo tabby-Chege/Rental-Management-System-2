@@ -9,6 +9,7 @@ from server.extensions import db
 from server.models import Payment, Property, User
 from server.models_tenant import Tenant
 from server.models_unit_lease import Lease, Unit
+from server.pagination import get_pagination, pagination_metadata
 
 payments_bp = Blueprint("payments_bp", __name__)
 
@@ -66,13 +67,20 @@ def get_payments():
     if user.role not in MANAGER_ROLES and user.role != "tenant":
         return jsonify({"error": "You do not have permission to view payments"}), 403
 
-    payments = (
+    pagination, error = get_pagination()
+    if error:
+        return jsonify({"error": error}), 400
+    page, per_page = pagination
+    result = (
         payment_query_for_user(user)
-        .order_by(Payment.payment_date.desc())
-        .all()
+        .order_by(Payment.payment_date.desc(), Payment.id.desc())
+        .paginate(page=page, per_page=per_page, error_out=False)
     )
 
-    return jsonify([payment.to_dict() for payment in payments]), 200
+    return jsonify({
+        "payments": [payment.to_dict() for payment in result.items],
+        "pagination": pagination_metadata(result),
+    }), 200
 
 
 @payments_bp.route("/payments", methods=["POST"])

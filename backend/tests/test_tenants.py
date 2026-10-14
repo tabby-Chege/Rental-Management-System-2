@@ -66,6 +66,40 @@ def test_landlord_creates_and_lists(client, world):
     assert res.get_json()["tenant"]["landlord_id"] == world["ids"]["landlord"]
     listing = client.get("/api/tenants", headers=world["landlord"]).get_json()
     assert len(listing["tenants"]) == 1
+    assert listing["pagination"]["total"] == 1
+
+
+def test_tenant_list_pagination_is_scoped_to_landlord(client, world):
+    for index in range(3):
+        response = create(
+            client,
+            world["landlord"],
+            name=f"Tenant {index}",
+            email=f"tenant{index}@x.com",
+        )
+        assert response.status_code == 201
+
+    create(client, world["other"], name="Other tenant", email="other@x.com")
+
+    first = client.get(
+        "/api/tenants?page=1&per_page=2", headers=world["landlord"]
+    )
+    assert first.status_code == 200
+    assert len(first.get_json()["tenants"]) == 2
+    assert first.get_json()["pagination"]["total"] == 3
+    assert first.get_json()["pagination"]["has_next"] is True
+
+    second = client.get(
+        "/api/tenants?page=2&per_page=2", headers=world["landlord"]
+    )
+    assert second.status_code == 200
+    assert len(second.get_json()["tenants"]) == 1
+
+
+def test_tenant_list_rejects_invalid_pagination(client, world):
+    response = client.get("/api/tenants?per_page=0", headers=world["landlord"])
+    assert response.status_code == 400
+    assert "error" in response.get_json()
 
 
 def test_tenant_cannot_list_or_create(client, world):

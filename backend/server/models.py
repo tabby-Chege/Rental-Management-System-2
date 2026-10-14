@@ -84,6 +84,7 @@ class Property(db.Model):
 
     def to_dict(self):
         return {
+            "id": self.id,
             "owner_id": self.owner_id,
             "name": self.name,
             "address": self.address,

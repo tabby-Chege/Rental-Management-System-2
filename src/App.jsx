@@ -5,6 +5,7 @@ import { Link, NavLink, Navigate, Route, Routes } from "react-router-dom";
 import SearchPage from "./pages/SearchPage/SearchPage";
 import PropertyDetailsPage from "./pages/PropertyDetailsPage/PropertyDetails";
 import ManagePropertiesPage from "./pages/ManagePropertiesPage/ManageProperties";
+import ManageTenantsPage from "./pages/ManageTenantsPage/ManageTenants";
 import "./App.css";
 
 function App() {
@@ -38,6 +39,15 @@ function App() {
   </NavLink>
 
   <NavLink
+    to="/manage/tenants"
+    className={({ isActive }) =>
+      isActive ? "app-navigation-link is-active" : "app-navigation-link"
+    }
+  >
+    My tenants
+  </NavLink>
+
+  <NavLink
     to="/login"
     className={({ isActive }) =>
       isActive ? "app-navigation-link is-active" : "app-navigation-link"
@@ -60,14 +70,14 @@ function App() {
       <main className="app-main">
         <Routes>
           <Route path="/" element={<Navigate to="/properties" replace />} />
-          <Route path="/properties" element={<SearchPage />} />
-          <Route path="/properties/:id" element={<PropertyDetailsPage />} />
           <Route element={<ProtectedRoute />}>
-           <Route
-
+            <Route path="/properties" element={<SearchPage />} />
+            <Route path="/properties/:id" element={<PropertyDetailsPage />} />
+            <Route
               path="/manage/properties"
               element={<ManagePropertiesPage />}
             />
+            <Route path="/manage/tenants" element={<ManageTenantsPage />} />
           </Route>
           <Route path="/login" element={<Login />} />
           <Route path="/register" element={<Register />} />
@@ -76,8 +86,8 @@ function App() {
       </main>
 
       <footer className="app-footer">
-        <span>Property records provided by RentCast.</span>
-        <span>Records do not confirm current rental availability.</span>
+        <span>Manage your rental portfolio in one place.</span>
+        <span>Property and tenant records are private to your account.</span>
       </footer>
     </div>
   );

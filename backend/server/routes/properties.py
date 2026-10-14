@@ -1,8 +1,11 @@
 from flask import Blueprint, request
 from flask_jwt_extended import get_jwt_identity, jwt_required
+from sqlalchemy import or_
 
 from server.extensions import db
 from server.models import Property, User
+from server.models_unit_lease import Unit
+from server.pagination import get_pagination, pagination_metadata
 
 
 properties_bp = Blueprint("properties", __name__, url_prefix="/api/properties")
@@ -97,11 +100,42 @@ def list_properties():
     if not user:
         return {"error": "User not found"}, 404
 
-    properties = (
-        owned_properties_query(user).order_by(Property.created_at.desc()).all()
+    pagination, error = get_pagination()
+    if error:
+        return {"error": error}, 400
+
+    page, per_page = pagination
+    query = owned_properties_query(user)
+
+    search = request.args.get("q", "").strip()
+    if len(search) > 120:
+        return {"error": "Search query must be 120 characters or fewer"}, 400
+    if search:
+        pattern = f"%{search}%"
+        query = query.filter(
+            or_(
+                Property.name.ilike(pattern),
+                Property.address.ilike(pattern),
+                Property.city.ilike(pattern),
+                Property.state.ilike(pattern),
+                Property.zip_code.ilike(pattern),
+            )
+        )
+
+    city = request.args.get("city", "").strip()
+    if len(city) > 100:
+        return {"error": "City must be 100 characters or fewer"}, 400
+    if city:
+        query = query.filter(Property.city.ilike(f"%{city}%"))
+
+    result = query.order_by(Property.created_at.desc(), Property.id.desc()).paginate(
+        page=page, per_page=per_page, error_out=False
     )
 
-    return {"properties": [p.to_dict() for p in properties]}, 200
+    return {
+        "properties": [prop.to_dict() for prop in result.items],
+        "pagination": pagination_metadata(result),
+    }, 200
 
 
 @properties_bp.route("", methods=["POST"])
@@ -196,6 +230,11 @@ def delete_property(property_id):
 
     if not prop:
         return {"error": "Property not found"}, 404
+
+    if Unit.query.filter_by(property_id=prop.id).first():
+        return {
+            "error": "Delete or move this property's units before deleting the property"
+        }, 409
 
     db.session.delete(prop)
     db.session.commit()

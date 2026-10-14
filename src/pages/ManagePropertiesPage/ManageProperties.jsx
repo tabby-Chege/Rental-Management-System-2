@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react";
+import { getToken } from "../../api/authAPI";
 import {
   createProperty,
   deleteProperty,
-  getToken,
   listProperties,
   updateProperty,
 } from "../../api/propertiesApi";
@@ -32,6 +32,8 @@ function ManagePropertiesPage() {
   const loggedIn = Boolean(getToken());
 
   const [properties, setProperties] = useState([]);
+  const [pagination, setPagination] = useState(null);
+  const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(loggedIn);
   const [loadError, setLoadError] = useState(null);
   const [reloadCount, setReloadCount] = useState(0);
@@ -46,10 +48,11 @@ function ManagePropertiesPage() {
 
     let ignore = false; // stops an old request from overwriting a newer one
 
-    listProperties()
+    listProperties({ page })
       .then((data) => {
         if (!ignore) {
-          setProperties(data);
+          setProperties(data.properties);
+          setPagination(data.pagination);
           setLoadError(null);
         }
       })
@@ -63,7 +66,7 @@ function ManagePropertiesPage() {
     return () => {
       ignore = true;
     };
-  }, [loggedIn, reloadCount]);
+  }, [loggedIn, page, reloadCount]);
 
   function handleChange(event) {
     const { name, value } = event.target;
@@ -96,7 +99,12 @@ function ManagePropertiesPage() {
         );
       } else {
         const created = await createProperty(form);
-        setProperties((current) => [created, ...current]);
+        if (page !== 1) {
+          setPage(1);
+        } else {
+          setProperties((current) => [created, ...current].slice(0, 10));
+          setReloadCount((count) => count + 1);
+        }
       }
       resetForm();
     } catch (err) {
@@ -114,8 +122,12 @@ function ManagePropertiesPage() {
 
     try {
       await deleteProperty(property.id);
-      setProperties((current) => current.filter((p) => p.id !== property.id));
       if (editingId === property.id) resetForm();
+      if (properties.length === 1 && page > 1) {
+        setPage((current) => current - 1);
+      } else {
+        handleRetry();
+      }
     } catch (err) {
       setLoadError(err.message);
     }
@@ -263,6 +275,27 @@ function ManagePropertiesPage() {
                   <p className="manage-item-description">
                     {property.description}
                   </p>
+                )}
+                {!loading && !loadError && pagination?.pages > 1 && (
+                  <nav className="pagination-controls" aria-label="Property pages">
+                    <button
+                      type="button"
+                      onClick={() => setPage((current) => current - 1)}
+                      disabled={!pagination.has_prev}
+                    >
+                      Previous
+                    </button>
+                    <span>
+                      Page {pagination.page} of {pagination.pages} ({pagination.total} total)
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setPage((current) => current + 1)}
+                      disabled={!pagination.has_next}
+                    >
+                      Next
+                    </button>
+                  </nav>
                 )}
               </div>
               <div className="manage-actions">
