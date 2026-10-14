@@ -1,5 +1,4 @@
-# Property Finder
-
+# Rental Management System
 Property Finder is a full-stack rental portfolio manager built by extending a Phase 1 React application. Landlords can create an account, manage their own property and tenant records, search their portfolio, and use related unit, lease, and payment records. The React client communicates with a custom Flask REST API; PostgreSQL stores persistent data through SQLAlchemy. The app does not verify rental availability or process real payments.
 
 ## Features
