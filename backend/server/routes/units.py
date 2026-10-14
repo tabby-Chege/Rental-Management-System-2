@@ -1,7 +1,7 @@
 from flask import Blueprint, jsonify, request
 from flask_jwt_extended import jwt_required, get_jwt_identity
-from models_unit_lease import db, Unit
-from models_property import Property
+from models.models_unit_lease import db, Unit
+from server.models import Property
 
 units_bp = Blueprint('units_bp', __name__)
 

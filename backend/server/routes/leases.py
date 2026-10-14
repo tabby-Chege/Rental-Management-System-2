@@ -1,7 +1,7 @@
 from datetime import datetime
 from flask import Blueprint, jsonify, request
 from flask_jwt_extended import jwt_required, get_jwt_identity
-from models_unit_lease import db, Lease, Unit
+from server.models import db, Lease, Unit
 
 leases_bp = Blueprint('leases_bp', __name__)
 

@@ -4,6 +4,7 @@ from flask_cors import CORS
 from server.config import Config
 from server.extensions import bcrypt, db, jwt
 from server.routes.auth import auth_bp
+from server.routes.payment import payments_bp
 from server.routes.properties import properties_bp
 
 
@@ -18,6 +19,7 @@ def create_app():
     jwt.init_app(app)
 
     app.register_blueprint(auth_bp)
+    app.register_blueprint(payments_bp)
     app.register_blueprint(properties_bp)
 
     @app.route("/api/health")
