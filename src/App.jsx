@@ -1,3 +1,6 @@
+import ProtectedRoute from "./components/ProtectedRoute";
+import Login from "./pages/Auth/Login";
+import Register from "./pages/Auth/Register";
 import { Link, NavLink, Navigate, Route, Routes } from "react-router-dom";
 import SearchPage from "./pages/SearchPage/SearchPage";
 import PropertyDetailsPage from "./pages/PropertyDetailsPage/PropertyDetails";
@@ -15,20 +18,43 @@ function App() {
             <small>PROPERTY RECORDS</small>
           </span>
         </Link>
-        <nav className="app-navigation" aria-label="Main navigation">
-          <NavLink
-            to="/properties"
-            className={({ isActive }) => isActive ? "app-navigation-link is-active" : "app-navigation-link"}
-          >
-            Search properties
-          </NavLink>
-          <NavLink
-            to="/manage/properties"
-            className={({ isActive }) => isActive ? "app-navigation-link is-active" : "app-navigation-link"}
-          >
-            My properties
-          </NavLink>
-        </nav>
+<nav className="app-navigation" aria-label="Main navigation">
+  <NavLink
+    to="/properties"
+    className={({ isActive }) =>
+      isActive ? "app-navigation-link is-active" : "app-navigation-link"
+    }
+  >
+    Search properties
+  </NavLink>
+
+  <NavLink
+    to="/manage/properties"
+    className={({ isActive }) =>
+      isActive ? "app-navigation-link is-active" : "app-navigation-link"
+    }
+  >
+    My properties
+  </NavLink>
+
+  <NavLink
+    to="/login"
+    className={({ isActive }) =>
+      isActive ? "app-navigation-link is-active" : "app-navigation-link"
+    }
+  >
+    Login
+  </NavLink>
+
+  <NavLink
+    to="/register"
+    className={({ isActive }) =>
+      isActive ? "app-navigation-link is-active" : "app-navigation-link"
+    }
+  >
+    Register
+  </NavLink>
+</nav>
       </header>
 
       <main className="app-main">
@@ -36,7 +62,15 @@ function App() {
           <Route path="/" element={<Navigate to="/properties" replace />} />
           <Route path="/properties" element={<SearchPage />} />
           <Route path="/properties/:id" element={<PropertyDetailsPage />} />
-          <Route path="/manage/properties" element={<ManagePropertiesPage />} />
+          <Route element={<ProtectedRoute />}>
+           <Route
+
+              path="/manage/properties"
+              element={<ManagePropertiesPage />}
+            />
+          </Route>
+          <Route path="/login" element={<Login />} />
+          <Route path="/register" element={<Register />} />
           <Route path="*" element={<NotFound />} />
         </Routes>
       </main>
