@@ -6,7 +6,7 @@ load_dotenv()
 
 
 class Config:
-    SQLALCHEMY_DATABASE_URI = os.getenv("SQLALCHEMY_DATABASE_URI")
+    SQLALCHEMY_DATABASE_URI = os.getenv("SQLALCHEMY_DATABASE_URI") or os.getenv("DATABASE_URL")
     SQLALCHEMY_TRACK_MODIFICATIONS = False
     SECRET_KEY = os.getenv("JWT_SECRET_KEY", "fallback_secret_key")
     # Hosted Postgres (e.g. Neon) closes idle connections. Check each pooled

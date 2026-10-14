@@ -1,15 +1,15 @@
 from flask import Blueprint, jsonify, request
 from flask_jwt_extended import jwt_required, get_jwt_identity
-from models.models_unit_lease import db, Unit
+from server.extensions import db
+from server.models_unit_lease import Unit
 from server.models import Property
-
 units_bp = Blueprint('units_bp', __name__)
 
 @units_bp.route('/properties/<int:property_id>/units', methods=['GET'])
 @jwt_required()
 def get_property_units(property_id):
     user_id = int(get_jwt_identity())
-    property_item = Property.query.filter_by(id=property_id, user_id=user_id).first()
+    property_item = Property.query.filter_by(id=property_id, owner_id=user_id).first()
     
     if not property_item:
         return jsonify({"error": "Property not found or unauthorized"}), 404
@@ -22,7 +22,7 @@ def get_property_units(property_id):
 @jwt_required()
 def create_unit(property_id):
     user_id = int(get_jwt_identity())
-    property_item = Property.query.filter_by(id=property_id, user_id=user_id).first()
+    property_item = Property.query.filter_by(id=property_id, owner_id=user_id).first()
     
     if not property_item:
         return jsonify({"error": "Property not found or unauthorized"}), 404

@@ -1,9 +1,11 @@
 from datetime import datetime
 from flask import Blueprint, jsonify, request
 from flask_jwt_extended import jwt_required, get_jwt_identity
-from server.models import db, Lease, Unit
+from server.extensions import db
+from server.models_unit_lease import Lease, Unit
 
 leases_bp = Blueprint('leases_bp', __name__)
+
 
 @leases_bp.route('/leases', methods=['POST'])
 @jwt_required()
