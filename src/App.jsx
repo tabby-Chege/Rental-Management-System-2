@@ -1,6 +1,9 @@
 import { Link, NavLink, Navigate, Route, Routes } from "react-router-dom";
 import SearchPage from "./pages/SearchPage/SearchPage";
 import PropertyDetailsPage from "./pages/PropertyDetailsPage/PropertyDetails";
+import TenantsPage from "./pages/TenantsPage/TenantsPage";
+import UnitsPage from "./pages/UnitsPage/UnitsPage";
+import LeasesPage from "./pages/LeasesPage/LeasesPage";
 import "./App.css";
 
 function App() {
@@ -21,6 +24,24 @@ function App() {
           >
             Search properties
           </NavLink>
+          <NavLink
+            to="/tenants"
+            className={({ isActive }) => isActive ? "app-navigation-link is-active" : "app-navigation-link"}
+          >
+            Tenants
+          </NavLink>
+          <NavLink
+            to="/units"
+            className={({ isActive }) => isActive ? "app-navigation-link is-active" : "app-navigation-link"}
+          >
+            Units
+          </NavLink>
+          <NavLink
+            to="/leases"
+            className={({ isActive }) => isActive ? "app-navigation-link is-active" : "app-navigation-link"}
+          >
+            Leases
+          </NavLink>
         </nav>
       </header>
 
@@ -29,6 +50,9 @@ function App() {
           <Route path="/" element={<Navigate to="/properties" replace />} />
           <Route path="/properties" element={<SearchPage />} />
           <Route path="/properties/:id" element={<PropertyDetailsPage />} />
+          <Route path="/tenants" element={<TenantsPage />} />
+          <Route path="/units" element={<UnitsPage />} />
+          <Route path="/leases" element={<LeasesPage />} />
           <Route path="*" element={<NotFound />} />
         </Routes>
       </main>
