@@ -1,4 +1,4 @@
-import ProtectedRoute from "./components/ProtectedRoute";
+import ProtectedRoute from "./Components/ProtectedRoute";
 import Login from "./pages/Auth/Login";
 import Register from "./pages/Auth/Register";
 import { Link, NavLink, Navigate, Route, Routes } from "react-router-dom";
