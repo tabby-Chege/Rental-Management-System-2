@@ -3,20 +3,18 @@
 Occupied/vacant is never stored. A unit is occupied when it has an active
 lease whose dates cover today (see current_leases below).
 """
+
 from datetime import date, datetime, timezone
 
 from server.extensions import db
 
 LEASE_STATUSES = ("active", "ended", "terminated")
 
-
 def _now():
     return datetime.now(timezone.utc)
 
-
 def _number(value):
     return None if value is None else float(value)
-
 
 class Unit(db.Model):
     __tablename__ = "units"
@@ -44,7 +42,6 @@ class Unit(db.Model):
             "current_lease_id": current_lease.id if current_lease else None,
             "created_at": self.created_at.isoformat(),
         }
-
 
 class Lease(db.Model):
     __tablename__ = "leases"
@@ -75,7 +72,6 @@ class Lease(db.Model):
             "status": self.status,
             "created_at": self.created_at.isoformat(),
         }
-
 
 def current_leases(unit_ids, today=None):
     """Map unit_id -> the active lease covering today. One query for any number of units."""

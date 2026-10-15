@@ -1,5 +1,5 @@
 from flask import Flask
-from server.extensions import db, jwt  # Adjust extensions path to match repo structure
+from server.extensions import db, jwt
 
 def create_app():
     app = Flask(__name__)

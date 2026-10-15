@@ -1,170 +1,177 @@
-from flask import Blueprint, request
+import math
+from flask import Blueprint, jsonify, request
+from flask_jwt_extended import get_jwt_identity, jwt_required
 
 from server.extensions import db
-from server.helpers import current_manager, error, is_id, parse_decimal, parse_int
-from server.models_unit_lease import Lease, Unit, current_leases
-from server.ownership import get_owned_property, get_owned_unit, owned_units_query
+from server.models import Property, User
+from server.models_unit_lease import Lease, Unit
+from server.pagination import get_pagination, pagination_metadata
 
-units_bp = Blueprint("units", __name__, url_prefix="/api/units")
+units_bp = Blueprint("units_bp", __name__, url_prefix="/api/units")
+MANAGER_ROLES = {"landlord", "admin"}
 
-EDITABLE = {"unit_number", "bedrooms", "bathrooms", "rent_amount"}
+def current_user():
+    try:
+        user_id = int(get_jwt_identity())
+    except (TypeError, ValueError):
+        return None
+    return db.session.get(User, user_id)
 
-# Optional numeric fields and how to validate each one.
-OPTIONAL_FIELDS = {
-    "bedrooms": lambda v: parse_int(v, "Bedrooms"),
-    "bathrooms": lambda v: parse_decimal(v, "Bathrooms", places="0.1", maximum="99.9"),
-    "rent_amount": lambda v: parse_decimal(v, "Rent amount"),
-}
+def accessible_property(user, property_id):
+    query = Property.query.filter_by(id=property_id)
+    if user.role != "admin":
+        query = query.filter_by(owner_id=user.id)
+    return query.first()
 
+def accessible_unit(user, unit_id):
+    query = Unit.query.join(Property).filter(Unit.id == unit_id)
+    if user.role != "admin":
+        query = query.filter(Property.owner_id == user.id)
+    return query.first()
 
-def read_optional_fields(data):
-    """Validate the optional fields present in data: (fields, None) or (None, error_response)."""
-    fields = {}
-    for name, parse in OPTIONAL_FIELDS.items():
-        if name not in data:
-            continue
-        if data[name] is None or data[name] == "":
-            fields[name] = None
-            continue
-        value, message = parse(data[name])
-        if message:
-            return None, error(message, 400)
-        fields[name] = value
-    return fields, None
+def validate_unit_data(data, partial=False):
+    if not isinstance(data, dict) or (not partial and not data):
+        return None, "Request body must be a JSON object with unit fields"
 
+    allowed = {"unit_number", "bedrooms", "bathrooms", "rent_amount"}
+    unknown = set(data) - allowed
+    if unknown:
+        return None, "Unsupported fields: " + ", ".join(sorted(unknown))
 
-def read_unit_number(value):
-    """Return (unit_number, None) or (None, message)."""
-    unit_number = str(value if value is not None else "").strip()
-    if not unit_number:
-        return None, "Unit number is required"
-    if len(unit_number) > 50:
-        return None, "Unit number must be 50 characters or fewer"
-    return unit_number, None
+    cleaned = {}
+    if "unit_number" in data:
+        value = data["unit_number"]
+        if not isinstance(value, str) or not value.strip() or len(value.strip()) > 50:
+            return None, "unit_number must be non-empty text of at most 50 characters"
+        cleaned["unit_number"] = value.strip()
+    elif not partial:
+        return None, "unit_number is required"
 
+    if "bedrooms" in data:
+        value = data["bedrooms"]
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            return None, "bedrooms must be a non-negative integer"
+        cleaned["bedrooms"] = value
+    elif not partial:
+        cleaned["bedrooms"] = 1
 
-def unit_response(unit):
-    return unit.to_dict(current_lease=current_leases([unit.id]).get(unit.id))
+    if "bathrooms" in data:
+        value = data["bathrooms"]
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not math.isfinite(value)
+            or value < 0
+        ):
+            return None, "bathrooms must be a non-negative number"
+        cleaned["bathrooms"] = value
+    elif not partial:
+        cleaned["bathrooms"] = 1.0
 
+    if "rent_amount" in data:
+        value = data["rent_amount"]
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not math.isfinite(value)
+            or value <= 0
+        ):
+            return None, "rent_amount must be a positive finite number"
+        cleaned["rent_amount"] = value
+    elif not partial:
+        return None, "rent_amount is required"
 
-@units_bp.route("", methods=["GET"])
-def list_units():
-    user, problem = current_manager()
-    if problem:
-        return problem
+    return cleaned, None
 
-    query = owned_units_query(user)
-    raw_property_id = request.args.get("property_id")
-    if raw_property_id is not None:
-        if not raw_property_id.isdigit():
-            return error("property_id must be a number", 400)
-        query = query.filter(Unit.property_id == int(raw_property_id))
+@units_bp.route("/properties/<int:property_id>/units", methods=["GET"])
+@jwt_required()
+def get_property_units(property_id):
+    user = current_user()
+    if not user:
+        return jsonify({"error": "User not found"}), 404
+    if user.role not in MANAGER_ROLES:
+        return jsonify({"error": "You do not have permission to view units"}), 403
 
-    units = query.order_by(Unit.property_id, Unit.unit_number).all()
-    leases = current_leases([unit.id for unit in units])
-    return {"units": [unit.to_dict(current_lease=leases.get(unit.id)) for unit in units]}, 200
+    prop = accessible_property(user, property_id)
+    if not prop:
+        return jsonify({"error": "Property not found"}), 404
 
+    pagination, error = get_pagination()
+    if error:
+        return jsonify({"error": error}), 400
+    page, per_page = pagination
 
-@units_bp.route("", methods=["POST"])
-def create_unit():
-    user, problem = current_manager()
-    if problem:
-        return problem
+    result = (
+        Unit.query.filter_by(property_id=property_id)
+        .order_by(Unit.unit_number, Unit.id)
+        .paginate(page=page, per_page=per_page, error_out=False)
+    )
+    return jsonify({
+        "units": [unit.to_dict() for unit in result.items],
+        "pagination": pagination_metadata(result),
+    }), 200
 
-    data = request.get_json(silent=True)
-    if not isinstance(data, dict):
-        return error("Request body must be valid JSON", 400)
+@units_bp.route("/properties/<int:property_id>/units", methods=["POST"])
+@jwt_required()
+def create_unit(property_id):
+    user = current_user()
+    if not user:
+        return jsonify({"error": "User not found"}), 404
+    if user.role not in MANAGER_ROLES:
+        return jsonify({"error": "You do not have permission to create units"}), 403
 
-    property_id = data.get("property_id")
-    if not is_id(property_id):
-        return error("property_id is required", 400)
+    prop = accessible_property(user, property_id)
+    if not prop:
+        return jsonify({"error": "Property not found"}), 404
 
-    unit_number, message = read_unit_number(data.get("unit_number"))
-    if message:
-        return error(message, 400)
+    data, error = validate_unit_data(request.get_json(silent=True))
+    if error:
+        return jsonify({"error": error}), 400
 
-    fields, problem = read_optional_fields(data)
-    if problem:
-        return problem
-
-    if not get_owned_property(user, property_id):
-        # Same answer whether it is missing or belongs to someone else.
-        return error("Property not found", 404)
-
-    if Unit.query.filter_by(property_id=property_id, unit_number=unit_number).first():
-        return error("This property already has a unit with that number", 409)
-
-    unit = Unit(property_id=property_id, unit_number=unit_number, **fields)
+    unit = Unit(property_id=prop.id, is_occupied=False, **data)
     db.session.add(unit)
     db.session.commit()
-    return {"message": "Unit created", "unit": unit.to_dict()}, 201
+    return jsonify(unit.to_dict()), 201
 
-
-@units_bp.route("/<int:unit_id>", methods=["GET"])
-def get_unit(unit_id):
-    user, problem = current_manager()
-    if problem:
-        return problem
-
-    unit = get_owned_unit(user, unit_id)
-    if not unit:
-        return error("Unit not found", 404)
-    return {"unit": unit_response(unit)}, 200
-
-
-@units_bp.route("/<int:unit_id>", methods=["PUT"])
+@units_bp.route("/units/<int:unit_id>", methods=["PUT"])
+@jwt_required()
 def update_unit(unit_id):
-    user, problem = current_manager()
-    if problem:
-        return problem
+    user = current_user()
+    if not user:
+        return jsonify({"error": "User not found"}), 404
+    if user.role not in MANAGER_ROLES:
+        return jsonify({"error": "You do not have permission to update units"}), 403
 
-    unit = get_owned_unit(user, unit_id)
+    unit = accessible_unit(user, unit_id)
     if not unit:
-        return error("Unit not found", 404)
+        return jsonify({"error": "Unit not found"}), 404
 
-    data = request.get_json(silent=True)
-    if not isinstance(data, dict) or not data:
-        return error("Request body must be valid JSON with at least one field", 400)
+    data, error = validate_unit_data(request.get_json(silent=True), partial=True)
+    if error:
+        return jsonify({"error": error}), 400
 
-    forbidden = set(data) - EDITABLE
-    if forbidden:
-        return error("You cannot change: " + ", ".join(sorted(forbidden)), 403)
-
-    fields, problem = read_optional_fields(data)
-    if problem:
-        return problem
-
-    if "unit_number" in data:
-        unit_number, message = read_unit_number(data["unit_number"])
-        if message:
-            return error(message, 400)
-        duplicate = Unit.query.filter_by(
-            property_id=unit.property_id, unit_number=unit_number
-        ).first()
-        if duplicate and duplicate.id != unit.id:
-            return error("This property already has a unit with that number", 409)
-        unit.unit_number = unit_number
-
-    for name, value in fields.items():
-        setattr(unit, name, value)
+    for field, value in data.items():
+        setattr(unit, field, value)
 
     db.session.commit()
-    return {"message": "Unit updated", "unit": unit_response(unit)}, 200
+    return jsonify(unit.to_dict()), 200
 
-
-@units_bp.route("/<int:unit_id>", methods=["DELETE"])
+@units_bp.route("/units/<int:unit_id>", methods=["DELETE"])
+@jwt_required()
 def delete_unit(unit_id):
-    user, problem = current_manager()
-    if problem:
-        return problem
+    user = current_user()
+    if not user:
+        return jsonify({"error": "User not found"}), 404
+    if user.role not in MANAGER_ROLES:
+        return jsonify({"error": "You do not have permission to delete units"}), 403
 
-    unit = get_owned_unit(user, unit_id)
+    unit = accessible_unit(user, unit_id)
     if not unit:
-        return error("Unit not found", 404)
+        return jsonify({"error": "Unit not found"}), 404
 
     if Lease.query.filter_by(unit_id=unit.id).first():
-        return error("This unit has leases and cannot be deleted. Remove its leases first.", 409)
+        return jsonify({"error": "Units with lease records cannot be deleted"}), 409
 
     db.session.delete(unit)
     db.session.commit()
-    return {"message": "Unit deleted"}, 200
+    return jsonify({"message": "Unit deleted successfully"}), 200

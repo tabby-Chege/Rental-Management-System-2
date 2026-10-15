@@ -1,73 +1,100 @@
-# Rental Property Finder
-
-A React prototype that helps prospective renters and property researchers browse property records in selected US cities. Users can search a city's results, narrow them by property age and size, sort the matches, and open a property detail page.
-
-This is a property discovery prototype, not a complete rental-management system. It does not manage leases, tenants, payments, or confirmed rental availability.
+# Rental Management System
+Property Finder is a full-stack rental portfolio manager built by extending a Phase 1 React application. Landlords can create an account, manage their own property and tenant records, search their portfolio, and use related unit, lease, and payment records. The React client communicates with a custom Flask REST API; PostgreSQL stores persistent data through SQLAlchemy. The app does not verify rental availability or process real payments.
 
 ## Features
 
-- Browse property records for Austin, Houston, Denver, Atlanta, Chicago, or Seattle.
-- Search the returned results by name/address, city, state, or ZIP code.
-- Filter by build year and square footage; sort by build year or size.
-- View property details and other records in the same city.
-- Show loading, empty, API error, and retry states.
-- Run with RentCast data or bundled sample data for development and demos.
+- Register and log in with JWT-based authentication.
+- Create, view, update, and delete property records.
+- Create, view, update, and delete tenant records.
+- Associate records using relational database keys: users own properties and tenant records; properties have units; units and tenants connect through leases; leases connect to payments.
+- Restrict property and tenant access to the authenticated owner (with explicit role rules for tenant self-access and admins).
+- Paginate property and tenant lists and search properties by name, address, city, state, or postal code.
+- Show loading, empty, validation, and failed-request messages in the React UI.
+- Keep the Phase 1 React/Vite application and its existing navigation and property-search/detail experience while using the project's API for saved records.
 
-## Tech Stack
+## Technology
 
-- React 19 and Vite
-- React Router
-- RentCast Property Records API
-- CSS and JavaScript
+- **Frontend:** React 19, Vite, React Router, JavaScript, CSS
+- **Backend:** Python 3.12+, Flask, Flask-JWT-Extended, Flask-SQLAlchemy, SQLAlchemy
+- **Database:** PostgreSQL (SQLite in automated backend tests)
+- **Database driver:** psycopg2
 
 ## Requirements
 
-- Node.js 20.19+ (required by the installed Vite release)
-- npm
-- A RentCast API key for live API requests; no key is needed in mock mode
+- Node.js 20.19+ and npm
+- Python 3.12+ and pip
+- PostgreSQL 14+ (or a compatible hosted PostgreSQL database)
 
-## Run Locally
+## Setup and Run
 
-1. Install dependencies:
+### 1. Configure PostgreSQL
 
-   ```sh
-   npm install
-   ```
+Create a database named `rental_management` and a database user with permission to use it. Keep credentials out of source control.
 
-2. Create a local environment file from the template:
+### 2. Start the Flask API
 
-   ```sh
-   cp .env.example .env.local
-   ```
+In a terminal:
 
-3. Choose a data mode in `.env.local`:
+```sh
+cd backend
+python -m venv .venv
+```
 
-   ```env
-   VITE_USE_MOCK=true
-   VITE_RENTCAST_API_KEY=
-   ```
+Activate the virtual environment, then install dependencies:
 
-   Keep `VITE_USE_MOCK=true` to use bundled sample properties. For live requests, set it to `false` and add your RentCast API key to `VITE_RENTCAST_API_KEY`.
+```sh
+# macOS/Linux
+source .venv/bin/activate
+pip install -r requirements.txt
 
-4. Start the development server:
+# Windows PowerShell
+# .venv\Scripts\Activate.ps1
+# pip install -r requirements.txt
+```
 
-   ```sh
-   npm run dev
-   ```
+Create `backend/.env` from `backend/.env.example`, then set:
 
-5. Open the local URL printed by Vite.
+```env
+DATABASE_URL=postgresql+psycopg2://YOUR_USER:YOUR_PASSWORD@localhost:5432/rental_management
+JWT_SECRET_KEY=replace-with-a-long-random-secret
+```
 
-## API Integration
+Run the API from the `backend` directory:
 
-The app uses the [RentCast Property Records API](https://developers.rentcast.io/reference/property-records):
+```sh
+python run.py
+```
 
-- `GET https://api.rentcast.io/v1/properties?city={city}&state={state}&limit=20` loads a city's records.
-- `GET https://api.rentcast.io/v1/properties/{id}` loads an individual record for its detail page.
-- Live requests send the API key in the `X-Api-Key` request header.
+The API listens on `http://localhost:5000`. The development app factory creates missing tables; for production, use a migration workflow rather than relying on `create_all`.
 
-API requests are isolated in `src/api/rentcastAPI.js`. `src/utils/propertyAdapter.js` maps API and sample records to the fields used by the UI. The city selector changes the API request; text search, filters, and sorting apply to the returned records in the browser.
+### 3. Start the React app
 
-## Validation
+In a second terminal from the project root:
+
+```sh
+npm install
+npm run dev
+```
+
+Vite proxies `/api` requests to the Flask service at `http://localhost:5000`. Register an account in the app to create a landlord account, then add property and tenant records. Do not place database credentials or JWT secrets in frontend environment variables.
+
+## API Overview
+
+All API responses are JSON. Protected routes require `Authorization: Bearer <access_token>`. Register and log in at `/api/auth/register` and `/api/auth/login`.
+
+| Resource | Routes | Access |
+|---|---|---|
+| **Properties** | `GET/POST /api/properties`; `GET/PUT/DELETE /api/properties/<id>` | Authenticated users; results and changes are limited to owned records, except admins. |
+| **Tenants** | `GET/POST /api/tenants`; `GET/PUT/DELETE /api/tenants/<id>` | Landlords manage their own tenant records; linked tenants may view their own record and update permitted contact fields. |
+| **Units** | `GET/POST /api/properties/<property_id>/units`; `PUT/DELETE /api/units/<id>` | Owning landlord or admin; deletion is blocked when a unit has lease history. |
+| **Leases** | `POST /api/leases`; `DELETE /api/leases/<id>` | Owning landlord or admin; ending a lease is represented as deactivation to preserve history. |
+| **Payments** | `GET/POST /payments` | Landlords see/manage payments for their properties; tenants can view payments linked to their lease. |
+
+Collection endpoints for properties, tenants, units, and payments support `page` and `per_page`, defaulting to page 1 and 10 records per page (maximum 100). For example: `GET /api/properties?page=2&per_page=10&q=Oak&city=Nairobi`. Paginated responses include the resource list and metadata (`page`, `per_page`, `total`, `pages`, `has_next`, and `has_prev`). Invalid pagination parameters return HTTP 400. Validation, authorization, missing records, and conflicts return an error message and an appropriate HTTP status.
+
+## Testing and Quality Checks
+
+Run frontend checks from the project root:
 
 ```sh
 npm test
@@ -75,31 +102,37 @@ npm run lint
 npm run build
 ```
 
+Run backend tests from `backend` with its virtual environment active:
+
+```sh
+pip install -r requirements.txt
+pytest
+```
+
+Backend tests use an in-memory SQLite database; normal app configuration uses PostgreSQL.
+
 ## Project Structure
 
 ```text
+backend/
+├── run.py
+├── requirements.txt
+├── server/
+│   ├── models*.py
+│   ├── routes/
+│   └── pagination.py
+└── tests/
 src/
-├── api/             # RentCast requests and mock mode
-├── Components/      # Reusable search controls
-├── data/            # Supported cities and sample records
-├── pages/           # Search and property detail views
-└── utils/           # Property normalization and search logic
+├── api/              # Flask API clients
+├── components/       # Shared route and property components
+├── pages/            # Search, authentication, property, and tenant views
+└── utils/
 ```
 
-## Known Limitations
+## Security and Limitations
 
-- The live search requests at most 20 records for the selected city. Search terms, filters, and sorting only inspect that returned result set; they do not run a full-text search across all RentCast records.
-- RentCast property records are not a guarantee that a property is currently available to rent. The prototype does not show verified rent prices or availability.
-- Bundled mock records are currently available for Austin, TX only; other locations show an empty result state in mock mode.
-- API availability, response limits, and rate limits depend on the RentCast account and plan.
-- Vite exposes variables prefixed with `VITE_` in browser-delivered code. Treat the API key used here as visible to users; this client-only setup is suitable for a prototype, not production. A deployed production app should make authenticated API requests through a server-side proxy and protect the key there.
-- No hosted deployment is configured yet.
-
-## Team Contributions
-
-- **Tabby:** React Router setup, navigation, base project structure, and API integration coordination
-- **Sonia:** RentCast API integration and data-fetching helpers
-- **David:** Property cards component and property listing display
-- **Luice:** Search filtering, input controls, and property details page
-- **Zack:** UI/CSS integration and project documentation
-  A React application built with Vite and React Router that enables property managers and tenants to browse rental listings, search properties, and view detailed property information using the RentCast API.
+- Store `.env` files locally only; `.gitignore` excludes them. Use a unique, high-entropy `JWT_SECRET_KEY`.
+- Public registration creates landlord accounts; role changes and admin provisioning must be performed through a trusted administrative process.
+- Tenant and lease relationships are stored, but the interface is focused on property and tenant CRUD rather than full leasing operations.
+- Payment records are tracking data only; the app does not connect to a payment provider or move money.
+- No deployment is configured. Use HTTPS, managed secrets, database migrations, and a production WSGI server before hosting publicly.

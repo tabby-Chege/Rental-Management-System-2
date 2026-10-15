@@ -15,16 +15,26 @@ auth_bp = Blueprint("auth", __name__, url_prefix="/api/auth")
 
 @auth_bp.route("/register", methods=["POST"])
 def register():
-    data = request.get_json()
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return {"error": "Request body must be valid JSON"}, 400
 
     name = data.get("name")
     email = data.get("email")
     password = data.get("password")
 
+    if not isinstance(name, str) or not isinstance(email, str) or not isinstance(password, str):
+        return {"error": "Name, email, and password are required"}, 400
+
+    name = name.strip()
+    email = email.strip().lower()
     if not name or not email or not password:
         return {
             "error": "Name, email, and password are required"
         }, 400
+
+    if len(name) > 120 or len(email) > 120:
+        return {"error": "Name and email must be 120 characters or fewer"}, 400
 
     if "@" not in email or "." not in email.split("@")[-1]:
         return {
@@ -46,6 +56,7 @@ def register():
     user = User(
         name=name,
         email=email,
+        role="landlord",
     )
 
     user.set_password(password)
@@ -64,11 +75,17 @@ def register():
 
 @auth_bp.route("/login", methods=["POST"])
 def login():
-    data = request.get_json()
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return {"error": "Request body must be valid JSON"}, 400
 
     email = data.get("email")
     password = data.get("password")
 
+    if not isinstance(email, str) or not isinstance(password, str):
+        return {"error": "Email and password are required"}, 400
+
+    email = email.strip().lower()
     if not email or not password:
         return {
             "error": "Email and password are required"
