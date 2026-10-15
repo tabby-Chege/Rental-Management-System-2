@@ -1,9 +1,18 @@
+from datetime import date
 from decimal import Decimal
 
 from flask import Blueprint, request
 
 from server.extensions import db
-from server.helpers import current_manager, error, is_id, parse_date, parse_decimal
+from server.helpers import (
+    current_manager,
+    current_tenant,
+    error,
+    is_id,
+    parse_date,
+    parse_decimal,
+)
+from server.models import Property
 from server.models_unit_lease import LEASE_STATUSES, Lease, Unit
 from server.ownership import (
     get_owned_lease,
@@ -106,6 +115,82 @@ def read_lease_values(unit, data, current=None):
     values["status"] = status
 
     return values, None
+
+
+def tenant_lease_view(lease, unit, prop, today):
+    """A lease as a tenant sees it: their own lease plus where it is."""
+    data = lease.to_dict()
+    data["is_current"] = lease.status == "active" and lease.start_date <= today <= lease.end_date
+    data["unit_number"] = unit.unit_number
+    data["property"] = {
+        "id": prop.id,
+        "name": prop.name,
+        "address": prop.address,
+        "city": prop.city,
+        "state": prop.state,
+    }
+    return data
+
+
+# ---------------------------------------------------------------------------
+# Tenant accounts (role "tenant"): read-only views of their own leases/payments.
+# "/mine" never clashes with "/<int:lease_id>" because that route only matches numbers.
+# ---------------------------------------------------------------------------
+
+@leases_bp.route("/mine", methods=["GET"])
+def my_leases():
+    tenant, problem = current_tenant()
+    if problem:
+        return problem
+
+    rows = (
+        db.session.query(Lease, Unit, Property)
+        .join(Unit, Lease.unit_id == Unit.id)
+        .join(Property, Unit.property_id == Property.id)
+        .filter(Lease.tenant_id == tenant.id)
+        .order_by(Lease.start_date.desc(), Lease.id.desc())
+        .all()
+    )
+    today = date.today()
+    return {"leases": [tenant_lease_view(l, u, p, today) for l, u, p in rows]}, 200
+
+
+@leases_bp.route("/mine/payments", methods=["GET"])
+def my_payments():
+    """Payment history across all of the tenant's leases, newest first.
+
+    Optional ?lease_id= narrows it to one of their own leases.
+    The Payment model lives in Zack's branch; until it is merged there is
+    no history to show, so this returns an empty list.
+    """
+    tenant, problem = current_tenant()
+    if problem:
+        return problem
+
+    lease_ids = [row.id for row in Lease.query.filter_by(tenant_id=tenant.id).with_entities(Lease.id)]
+
+    raw = request.args.get("lease_id")
+    if raw is not None:
+        if not raw.isdigit():
+            return error("lease_id must be a number", 400)
+        if int(raw) not in lease_ids:
+            # Same answer whether it is missing or belongs to someone else.
+            return error("Lease not found", 404)
+        lease_ids = [int(raw)]
+
+    payment_model = db.Model.registry._class_registry.get("Payment")
+    if payment_model is None or not lease_ids:
+        return {"payments": []}, 200
+
+    newest_first = (
+        payment_model.payment_date if hasattr(payment_model, "payment_date") else payment_model.id
+    )
+    payments = (
+        payment_model.query.filter(payment_model.lease_id.in_(lease_ids))
+        .order_by(newest_first.desc(), payment_model.id.desc())
+        .all()
+    )
+    return {"payments": [payment.to_dict() for payment in payments]}, 200
 
 
 @leases_bp.route("", methods=["GET"])

@@ -19,3 +19,10 @@ export const updateLease = (id, body) =>
   request(`/api/leases/${id}`, { method: "PUT", body: JSON.stringify(body) }).then((d) => d.lease);
 
 export const deleteLease = (id) => request(`/api/leases/${id}`, { method: "DELETE" });
+
+// Tenant accounts only (role "tenant"): read-only views of their own leases and payments.
+export const listMyLeases = () => request("/api/leases/mine").then((d) => d.leases);
+
+// Newest first. Pass a lease id to see the payments for just that lease.
+export const listMyPayments = (leaseId) =>
+  request(`/api/leases/mine/payments${leaseId ? `?lease_id=${leaseId}` : ""}`).then((d) => d.payments);

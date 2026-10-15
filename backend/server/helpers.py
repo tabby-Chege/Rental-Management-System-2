@@ -6,10 +6,9 @@ from flask_jwt_extended import get_jwt_identity, verify_jwt_in_request
 
 from server.extensions import db
 from server.models import User
+from server.models_tenant import Tenant
 
-# TEMP: "tenant" is allowed because every account registers with the tenant
-# role and nothing assigns "landlord" yet. Remove "tenant" once that exists.
-MANAGER_ROLES = {"tenant", "landlord", "admin"}
+MANAGER_ROLES = {"landlord", "admin"}
 
 
 def error(message, status):
@@ -25,6 +24,24 @@ def current_manager():
     if user.role not in MANAGER_ROLES:
         return None, error("You do not have permission to access this resource", 403)
     return user, None
+
+
+def current_tenant():
+    """For tenant accounts: return (tenant_record, None), or (None, error_response).
+
+    A tenant account is linked to its tenant record through Tenant.user_id
+    (set by the landlord, see Luice's tenants routes).
+    """
+    verify_jwt_in_request()
+    user = db.session.get(User, int(get_jwt_identity()))
+    if not user:
+        return None, error("User not found", 404)
+    if user.role != "tenant":
+        return None, error("You do not have permission to access this resource", 403)
+    tenant = Tenant.query.filter_by(user_id=user.id).first()
+    if not tenant:
+        return None, error("No tenant record is linked to your account", 404)
+    return tenant, None
 
 
 def is_id(value):
