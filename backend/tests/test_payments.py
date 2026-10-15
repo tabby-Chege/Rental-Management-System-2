@@ -244,3 +244,23 @@ def test_lease_records_cannot_be_managed_by_another_landlord(client, world):
     assert client.delete(
         f"/api/leases/{own_lease_id}", headers=world["landlord"]
     ).status_code == 200
+
+
+def test_lease_collection_and_update_routes(client, world):
+    lease_id = make_lease(client, world)
+
+    listed = client.get("/api/leases", headers=world["landlord"])
+    assert listed.status_code == 200
+    assert any(lease["id"] == lease_id for lease in listed.get_json()["leases"])
+    assert client.get(
+        f"/api/leases/{lease_id}", headers=world["landlord"]
+    ).status_code == 200
+
+    updated = client.put(
+        f"/api/leases/{lease_id}",
+        headers=world["landlord"],
+        json={"status": "ended"},
+    )
+    assert updated.status_code == 200
+    assert updated.get_json()["status"] == "ended"
+    assert updated.get_json()["deposit"] == 1000

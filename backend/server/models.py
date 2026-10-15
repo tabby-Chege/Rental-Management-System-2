@@ -1,3 +1,12 @@
+def to_dict(self):
+        return {
+            "id": self.id,
+            "name": self.name,
+            "email": self.email,
+            "role": self.role,
+            "created_at": self.created_at.isoformat(),
+        }
+
 from datetime import datetime, timezone
 
 from server.extensions import bcrypt, db
@@ -31,6 +40,8 @@ class User(db.Model):
             "role": self.role,
             "created_at": self.created_at.isoformat(),
         }
+
+
 class Payment(db.Model):
     __tablename__ = 'payments'
 
@@ -38,8 +49,8 @@ class Payment(db.Model):
     lease_id = db.Column(db.Integer, db.ForeignKey('leases.id'), nullable=False)
     amount = db.Column(db.Float, nullable=False)
     payment_date = db.Column(
-        db.DateTime(timezone=True), 
-        default=lambda: datetime.now(timezone.utc), 
+        db.DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
         nullable=False
     )
     payment_method = db.Column(db.String(50), nullable=False)  # M-Pesa, Bank Transfer, Cash

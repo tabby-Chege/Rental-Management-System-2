@@ -151,6 +151,23 @@ def test_units_are_owned_crud_resources(client, world):
     assert client.delete(unit_endpoint, headers=world["landlord"]).status_code == 200
 
 
+def test_units_collection_routes_support_the_units_page(client, world):
+    property_id = create_property(
+        client, world["landlord"], "Units page home"
+    ).get_json()["property"]["id"]
+    created = client.post(
+        "/api/units",
+        headers=world["landlord"],
+        json={"property_id": property_id, "unit_number": "B2"},
+    )
+    assert created.status_code == 201
+    unit_id = created.get_json()["id"]
+    assert client.get("/api/units", headers=world["landlord"]).get_json()["units"][0]["id"] == unit_id
+    assert client.get(
+        f"/api/units/{unit_id}", headers=world["landlord"]
+    ).get_json()["unit_number"] == "B2"
+
+
 def test_property_delete_preserves_linked_units(client, world):
     property_id = create_property(
         client, world["landlord"], "Occupied property"

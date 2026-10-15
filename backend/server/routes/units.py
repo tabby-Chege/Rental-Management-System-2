@@ -1,17 +1,14 @@
 import math
-
 from flask import Blueprint, jsonify, request
 from flask_jwt_extended import get_jwt_identity, jwt_required
 
 from server.extensions import db
 from server.models import Property, User
-from server.models_unit_lease import Lease, Unit
+from server.models_unit_lease import Lease, Unit, current_leases
 from server.pagination import get_pagination, pagination_metadata
 
-
-units_bp = Blueprint("units_bp", __name__)
+units_bp = Blueprint("units_bp", __name__, url_prefix="/api/units")
 MANAGER_ROLES = {"landlord", "admin"}
-
 
 def current_user():
     try:
@@ -20,13 +17,11 @@ def current_user():
         return None
     return db.session.get(User, user_id)
 
-
 def accessible_property(user, property_id):
     query = Property.query.filter_by(id=property_id)
     if user.role != "admin":
         query = query.filter_by(owner_id=user.id)
     return query.first()
-
 
 def accessible_unit(user, unit_id):
     query = Unit.query.join(Property).filter(Unit.id == unit_id)
@@ -34,9 +29,8 @@ def accessible_unit(user, unit_id):
         query = query.filter(Property.owner_id == user.id)
     return query.first()
 
-
 def validate_unit_data(data, partial=False):
-    if not isinstance(data, dict) or (partial and not data):
+    if not isinstance(data, dict) or (not partial and not data):
         return None, "Request body must be a JSON object with unit fields"
 
     allowed = {"unit_number", "bedrooms", "bathrooms", "rent_amount"}
@@ -55,7 +49,9 @@ def validate_unit_data(data, partial=False):
 
     if "bedrooms" in data:
         value = data["bedrooms"]
-        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        if value is not None and (
+            isinstance(value, bool) or not isinstance(value, int) or value < 0
+        ):
             return None, "bedrooms must be a non-negative integer"
         cleaned["bedrooms"] = value
     elif not partial:
@@ -63,7 +59,7 @@ def validate_unit_data(data, partial=False):
 
     if "bathrooms" in data:
         value = data["bathrooms"]
-        if (
+        if value is not None and (
             isinstance(value, bool)
             or not isinstance(value, (int, float))
             or not math.isfinite(value)
@@ -76,19 +72,102 @@ def validate_unit_data(data, partial=False):
 
     if "rent_amount" in data:
         value = data["rent_amount"]
-        if (
+        if value is not None and (
             isinstance(value, bool)
             or not isinstance(value, (int, float))
             or not math.isfinite(value)
-            or value <= 0
+            or value < 0
         ):
-            return None, "rent_amount must be a positive finite number"
+            return None, "rent_amount must be a non-negative finite number"
         cleaned["rent_amount"] = value
     elif not partial:
-        return None, "rent_amount is required"
+        cleaned["rent_amount"] = None
 
     return cleaned, None
 
+
+def unit_payload(unit, lease=None):
+    return unit.to_dict(lease)
+
+
+@units_bp.route("/units", methods=["GET"])
+@jwt_required()
+def list_units():
+    user = current_user()
+    if not user:
+        return jsonify({"error": "User not found"}), 404
+    if user.role not in MANAGER_ROLES:
+        return jsonify({"error": "You do not have permission to view units"}), 403
+
+    pagination, error = get_pagination()
+    if error:
+        return jsonify({"error": error}), 400
+    page, per_page = pagination
+
+    query = Unit.query.join(Property)
+    if user.role != "admin":
+        query = query.filter(Property.owner_id == user.id)
+    property_id = request.args.get("property_id")
+    if property_id is not None:
+        try:
+            property_id = int(property_id)
+        except ValueError:
+            return jsonify({"error": "property_id must be a positive integer"}), 400
+        if property_id < 1:
+            return jsonify({"error": "property_id must be a positive integer"}), 400
+        query = query.filter(Unit.property_id == property_id)
+
+    result = query.order_by(Unit.property_id, Unit.unit_number, Unit.id).paginate(
+        page=page, per_page=per_page, error_out=False
+    )
+    leases = current_leases([unit.id for unit in result.items])
+    return jsonify({
+        "units": [unit_payload(unit, leases.get(unit.id)) for unit in result.items],
+        "pagination": pagination_metadata(result),
+    }), 200
+
+
+@units_bp.route("/units", methods=["POST"])
+@jwt_required()
+def create_unit_without_property_path():
+    user = current_user()
+    if not user:
+        return jsonify({"error": "User not found"}), 404
+    if user.role not in MANAGER_ROLES:
+        return jsonify({"error": "You do not have permission to create units"}), 403
+
+    body = request.get_json(silent=True)
+    if not isinstance(body, dict):
+        return jsonify({"error": "Request body must be a JSON object"}), 400
+    property_id = body.get("property_id")
+    if isinstance(property_id, bool) or not isinstance(property_id, int) or property_id < 1:
+        return jsonify({"error": "property_id must be a positive integer"}), 400
+
+    prop = accessible_property(user, property_id)
+    if not prop:
+        return jsonify({"error": "Property not found"}), 404
+    data, error = validate_unit_data({key: value for key, value in body.items() if key != "property_id"})
+    if error:
+        return jsonify({"error": error}), 400
+
+    unit = Unit(property_id=prop.id, **data)
+    db.session.add(unit)
+    db.session.commit()
+    return jsonify(unit_payload(unit)), 201
+
+
+@units_bp.route("/units/<int:unit_id>", methods=["GET"])
+@jwt_required()
+def get_unit(unit_id):
+    user = current_user()
+    if not user:
+        return jsonify({"error": "User not found"}), 404
+    if user.role not in MANAGER_ROLES:
+        return jsonify({"error": "You do not have permission to view units"}), 403
+    unit = accessible_unit(user, unit_id)
+    if not unit:
+        return jsonify({"error": "Unit not found"}), 404
+    return jsonify(unit_payload(unit)), 200
 
 @units_bp.route("/properties/<int:property_id>/units", methods=["GET"])
 @jwt_required()
@@ -107,16 +186,17 @@ def get_property_units(property_id):
     if error:
         return jsonify({"error": error}), 400
     page, per_page = pagination
+
     result = (
         Unit.query.filter_by(property_id=property_id)
         .order_by(Unit.unit_number, Unit.id)
         .paginate(page=page, per_page=per_page, error_out=False)
     )
+    leases = current_leases([unit.id for unit in result.items])
     return jsonify({
-        "units": [unit.to_dict() for unit in result.items],
+        "units": [unit_payload(unit, leases.get(unit.id)) for unit in result.items],
         "pagination": pagination_metadata(result),
     }), 200
-
 
 @units_bp.route("/properties/<int:property_id>/units", methods=["POST"])
 @jwt_required()
@@ -135,11 +215,10 @@ def create_unit(property_id):
     if error:
         return jsonify({"error": error}), 400
 
-    unit = Unit(property_id=prop.id, is_occupied=False, **data)
+    unit = Unit(property_id=prop.id, **data)
     db.session.add(unit)
     db.session.commit()
-    return jsonify(unit.to_dict()), 201
-
+    return jsonify(unit_payload(unit)), 201
 
 @units_bp.route("/units/<int:unit_id>", methods=["PUT"])
 @jwt_required()
@@ -160,9 +239,9 @@ def update_unit(unit_id):
 
     for field, value in data.items():
         setattr(unit, field, value)
-    db.session.commit()
-    return jsonify(unit.to_dict()), 200
 
+    db.session.commit()
+    return jsonify(unit_payload(unit)), 200
 
 @units_bp.route("/units/<int:unit_id>", methods=["DELETE"])
 @jwt_required()
@@ -176,6 +255,7 @@ def delete_unit(unit_id):
     unit = accessible_unit(user, unit_id)
     if not unit:
         return jsonify({"error": "Unit not found"}), 404
+
     if Lease.query.filter_by(unit_id=unit.id).first():
         return jsonify({"error": "Units with lease records cannot be deleted"}), 409
 
