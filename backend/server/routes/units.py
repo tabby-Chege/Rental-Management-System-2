@@ -1,5 +1,4 @@
 import math
-
 from flask import Blueprint, jsonify, request
 from flask_jwt_extended import get_jwt_identity, jwt_required
 
@@ -8,10 +7,8 @@ from server.models import Property, User
 from server.models_unit_lease import Lease, Unit
 from server.pagination import get_pagination, pagination_metadata
 
-
-units_bp = Blueprint("units_bp", __name__)
+units_bp = Blueprint("units_bp", __name__, url_prefix="/api/units")
 MANAGER_ROLES = {"landlord", "admin"}
-
 
 def current_user():
     try:
@@ -20,13 +17,11 @@ def current_user():
         return None
     return db.session.get(User, user_id)
 
-
 def accessible_property(user, property_id):
     query = Property.query.filter_by(id=property_id)
     if user.role != "admin":
         query = query.filter_by(owner_id=user.id)
     return query.first()
-
 
 def accessible_unit(user, unit_id):
     query = Unit.query.join(Property).filter(Unit.id == unit_id)
@@ -34,9 +29,8 @@ def accessible_unit(user, unit_id):
         query = query.filter(Property.owner_id == user.id)
     return query.first()
 
-
 def validate_unit_data(data, partial=False):
-    if not isinstance(data, dict) or (partial and not data):
+    if not isinstance(data, dict) or (not partial and not data):
         return None, "Request body must be a JSON object with unit fields"
 
     allowed = {"unit_number", "bedrooms", "bathrooms", "rent_amount"}
@@ -89,7 +83,6 @@ def validate_unit_data(data, partial=False):
 
     return cleaned, None
 
-
 @units_bp.route("/properties/<int:property_id>/units", methods=["GET"])
 @jwt_required()
 def get_property_units(property_id):
@@ -107,6 +100,7 @@ def get_property_units(property_id):
     if error:
         return jsonify({"error": error}), 400
     page, per_page = pagination
+
     result = (
         Unit.query.filter_by(property_id=property_id)
         .order_by(Unit.unit_number, Unit.id)
@@ -116,7 +110,6 @@ def get_property_units(property_id):
         "units": [unit.to_dict() for unit in result.items],
         "pagination": pagination_metadata(result),
     }), 200
-
 
 @units_bp.route("/properties/<int:property_id>/units", methods=["POST"])
 @jwt_required()
@@ -140,7 +133,6 @@ def create_unit(property_id):
     db.session.commit()
     return jsonify(unit.to_dict()), 201
 
-
 @units_bp.route("/units/<int:unit_id>", methods=["PUT"])
 @jwt_required()
 def update_unit(unit_id):
@@ -160,9 +152,9 @@ def update_unit(unit_id):
 
     for field, value in data.items():
         setattr(unit, field, value)
+
     db.session.commit()
     return jsonify(unit.to_dict()), 200
-
 
 @units_bp.route("/units/<int:unit_id>", methods=["DELETE"])
 @jwt_required()
@@ -176,6 +168,7 @@ def delete_unit(unit_id):
     unit = accessible_unit(user, unit_id)
     if not unit:
         return jsonify({"error": "Unit not found"}), 404
+
     if Lease.query.filter_by(unit_id=unit.id).first():
         return jsonify({"error": "Units with lease records cannot be deleted"}), 409
 
