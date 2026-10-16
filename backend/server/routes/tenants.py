@@ -1,10 +1,13 @@
+from datetime import date
+
 from flask import Blueprint, request
 from flask_jwt_extended import get_jwt_identity, verify_jwt_in_request
 from sqlalchemy import inspect, text
 
 from server.extensions import db
-from server.models import User
+from server.models import Property, User
 from server.models_tenant import Tenant
+from server.models_unit_lease import Lease, Unit
 from server.pagination import get_pagination, pagination_metadata
 
 tenants_bp = Blueprint("tenants", __name__, url_prefix="/api/tenants")
@@ -141,7 +144,84 @@ def my_tenant_record():
     tenant = Tenant.query.filter_by(user_id=user.id).first()
     if not tenant:
         return error("No tenant record is linked to your account", 404)
-    return {"tenant": tenant.to_dict()}, 200
+
+    today = date.today()
+    leases = (
+        Lease.query.filter(
+            Lease.tenant_id == tenant.id,
+            Lease.status == "active",
+            Lease.start_date <= today,
+            Lease.end_date >= today,
+        )
+        .order_by(Lease.start_date.desc(), Lease.id.desc())
+        .all()
+    )
+    residences = []
+    for lease in leases:
+        unit = db.session.get(Unit, lease.unit_id)
+        prop = db.session.get(Property, unit.property_id) if unit else None
+        landlord = db.session.get(User, prop.owner_id) if prop else None
+        if not unit or not prop:
+            continue
+        residences.append({
+            "lease": lease.to_dict(),
+            "unit": unit.to_dict(lease),
+            "property": prop.to_dict(),
+            "landlord": (
+                {"name": landlord.name, "email": landlord.email}
+                if landlord
+                else None
+            ),
+        })
+
+    return {
+        "tenant": tenant.to_dict(),
+        "current_residences": residences,
+    }, 200
+
+
+@tenants_bp.route("/me", methods=["PUT"])
+def update_my_tenant_record():
+    user = current_user()
+    if not user:
+        return error("User not found", 404)
+    if user.role != "tenant":
+        return error("You do not have permission to access this resource", 403)
+
+    tenant = Tenant.query.filter_by(user_id=user.id).first()
+    if not tenant:
+        return error("No tenant record is linked to your account", 404)
+
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict) or not data:
+        return error("Request body must be valid JSON with at least one field", 400)
+    forbidden = set(data) - TENANT_EDITABLE
+    if forbidden:
+        return error("You cannot change: " + ", ".join(sorted(forbidden)), 403)
+
+    if "email" in data:
+        email = clean_email(data["email"])
+        if not email:
+            return error("A valid email address is required", 400)
+        if len(email) > 120:
+            return error("Email is too long", 400)
+        duplicate = Tenant.query.filter_by(
+            landlord_id=tenant.landlord_id, email=email
+        ).first()
+        if duplicate and duplicate.id != tenant.id:
+            return error("Another tenant already uses this email", 409)
+        tenant.email = email
+
+    if "phone" in data:
+        if data["phone"] is not None and not isinstance(data["phone"], str):
+            return error("Phone must be text", 400)
+        phone = (data["phone"] or "").strip() or None
+        if phone and len(phone) > 30:
+            return error("Phone is too long", 400)
+        tenant.phone = phone
+
+    db.session.commit()
+    return {"message": "Tenant details updated", "tenant": tenant.to_dict()}, 200
 
 
 @tenants_bp.route("/<int:tenant_id>", methods=["GET"])

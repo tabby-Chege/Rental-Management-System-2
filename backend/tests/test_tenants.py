@@ -1,4 +1,5 @@
 import os
+from datetime import date, timedelta
 
 os.environ["DATABASE_URL"] = "sqlite:///:memory:"
 os.environ["JWT_SECRET_KEY"] = "test-secret-key-for-tests-only-0123456789"
@@ -107,6 +108,37 @@ def test_tenant_cannot_list_or_create(client, world):
     assert create(client, world["tenant"]).status_code == 403
 
 
+def test_linked_tenant_can_update_own_details_only(client, world):
+    created = create(
+        client,
+        world["landlord"],
+        name="Tom",
+        email="tom@x.com",
+        phone="0700",
+        user_id=world["ids"]["tenant_user"],
+    )
+    assert created.status_code == 201
+
+    updated = client.put(
+        "/api/tenants/me",
+        headers=world["tenant"],
+        json={"email": "tom.updated@x.com", "phone": "0711"},
+    )
+    assert updated.status_code == 200
+    assert updated.get_json()["tenant"]["email"] == "tom.updated@x.com"
+    assert updated.get_json()["tenant"]["phone"] == "0711"
+    assert client.put(
+        "/api/tenants/me",
+        headers=world["tenant"],
+        json={"landlord_id": world["ids"]["other"]},
+    ).status_code == 403
+    assert client.put(
+        "/api/tenants/me",
+        headers=world["landlord"],
+        json={"phone": "0712"},
+    ).status_code == 403
+
+
 def test_validation_and_bad_json(client, world):
     assert create(client, world["landlord"], name="").status_code == 400
     assert create(client, world["landlord"], email="nope").status_code == 400
@@ -136,6 +168,57 @@ def test_tenant_sees_only_own_record(client, world):
     assert client.get("/api/tenants/me", headers=world["tenant"]).get_json()["tenant"]["id"] == mine
     assert client.get("/api/tenants/%d" % mine, headers=world["tenant"]).status_code == 200
     assert client.get("/api/tenants/%d" % theirs, headers=world["tenant"]).status_code == 404
+    assert client.get("/api/tenants/me", headers=world["tenant2"]).status_code == 404
+
+
+def test_tenant_details_include_only_own_current_property_and_lease(client, world):
+    tenant = create(
+        client,
+        world["landlord"],
+        name="Tom",
+        email="tom@x.com",
+        user_id=world["ids"]["tenant_user"],
+    ).get_json()["tenant"]
+    property_record = client.post(
+        "/api/properties",
+        headers=world["landlord"],
+        json={
+            "name": "Tenant home",
+            "address": "12 Garden Road",
+            "city": "Nairobi",
+            "state": "Nairobi",
+            "description": "A sunny apartment near the park.",
+        },
+    ).get_json()["property"]
+    unit = client.post(
+        f"/api/properties/{property_record['id']}/units",
+        headers=world["landlord"],
+        json={"unit_number": "B4", "bedrooms": 2, "bathrooms": 1, "rent_amount": 1500},
+    ).get_json()
+    today = date.today()
+    lease_response = client.post(
+        "/api/leases",
+        headers=world["landlord"],
+        json={
+            "unit_id": unit["id"],
+            "tenant_id": tenant["id"],
+            "start_date": today.isoformat(),
+            "end_date": (today + timedelta(days=180)).isoformat(),
+            "monthly_rent": 1500,
+            "deposit": 3000,
+        },
+    )
+    assert lease_response.status_code == 201
+
+    details = client.get("/api/tenants/me", headers=world["tenant"])
+    assert details.status_code == 200
+    residence = details.get_json()["current_residences"][0]
+    assert residence["property"]["id"] == property_record["id"]
+    assert residence["property"]["address"] == "12 Garden Road"
+    assert residence["property"]["description"] == "A sunny apartment near the park."
+    assert residence["unit"]["unit_number"] == "B4"
+    assert residence["lease"]["monthly_rent"] == 1500
+
     assert client.get("/api/tenants/me", headers=world["tenant2"]).status_code == 404
 
 

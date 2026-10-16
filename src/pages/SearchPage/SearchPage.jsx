@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import SearchBar from "../../Components/SearchBar/SearchBar";
-import { listProperties } from "../../api/propertiesApi";
+import { listPublicProperties } from "../../api/propertiesApi";
 import "./SearchPage.css";
 
 const PER_PAGE = 9;
@@ -10,6 +10,10 @@ function SearchPage() {
   const [properties, setProperties] = useState([]);
   const [query, setQuery] = useState("");
   const [city, setCity] = useState("");
+  const [minRent, setMinRent] = useState("");
+  const [maxRent, setMaxRent] = useState("");
+  const [bedrooms, setBedrooms] = useState("");
+  const [available, setAvailable] = useState("");
   const [page, setPage] = useState(1);
   const [pagination, setPagination] = useState(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -23,11 +27,15 @@ function SearchPage() {
       setIsLoading(true);
       setError("");
       try {
-        const result = await listProperties({
+        const result = await listPublicProperties({
           page,
           perPage: PER_PAGE,
           q: query,
           city,
+          minRent,
+          maxRent,
+          bedrooms,
+          available,
         });
         if (!ignore) {
           setProperties(result.properties);
@@ -48,7 +56,7 @@ function SearchPage() {
     return () => {
       ignore = true;
     };
-  }, [page, query, city, retryCount]);
+  }, [page, query, city, minRent, maxRent, bedrooms, available, retryCount]);
 
   function updateSearch(value) {
     setQuery(value);
@@ -63,8 +71,8 @@ function SearchPage() {
   return (
     <div className="search-page">
       <header className="search-page-header">
-        <h1>Search my properties</h1>
-        <p>Find your saved property records by name, address, or location.</p>
+        <h1>Find a rental property</h1>
+        <p>Browse listings from property managers and narrow them by location and unit details.</p>
       </header>
 
       <div className="search-page-searchbar">
@@ -83,6 +91,63 @@ function SearchPage() {
         />
       </div>
 
+      <div className="search-filters" aria-label="Property filters">
+        <label>
+          Minimum rent
+          <input
+            type="number"
+            min="0"
+            value={minRent}
+            onChange={(event) => {
+              setMinRent(event.target.value);
+              setPage(1);
+            }}
+          />
+        </label>
+        <label>
+          Maximum rent
+          <input
+            type="number"
+            min="0"
+            value={maxRent}
+            onChange={(event) => {
+              setMaxRent(event.target.value);
+              setPage(1);
+            }}
+          />
+        </label>
+        <label>
+          Bedrooms
+          <select
+            value={bedrooms}
+            onChange={(event) => {
+              setBedrooms(event.target.value);
+              setPage(1);
+            }}
+          >
+            <option value="">Any</option>
+            {[0, 1, 2, 3, 4, 5].map((count) => (
+              <option key={count} value={count}>
+                {count === 0 ? "Studio" : `${count}+`}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          Availability
+          <select
+            value={available}
+            onChange={(event) => {
+              setAvailable(event.target.value);
+              setPage(1);
+            }}
+          >
+            <option value="">Any</option>
+            <option value="true">Available</option>
+          </select>
+        </label>
+      </div>
+
       <div className="results-area">
         {error && (
           <div className="error-message" role="alert">
@@ -96,7 +161,7 @@ function SearchPage() {
           </div>
         )}
 
-        {isLoading && <p className="status">Loading your properties...</p>}
+        {isLoading && <p className="status">Loading properties...</p>}
 
         {!isLoading && !error && pagination && (
           <div className="results-header">
@@ -109,8 +174,8 @@ function SearchPage() {
         {!isLoading && !error && properties.length === 0 && (
           <div className="empty-state">
             <h2>No properties found</h2>
-            <p>Try another search or add a property to your portfolio.</p>
-            <Link to="/manage/properties">Manage my properties</Link>
+            <p>Try a different city, price range, or bedroom count.</p>
+            <Link to="/register">Create an account</Link>
           </div>
         )}
 

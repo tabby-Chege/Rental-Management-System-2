@@ -5,7 +5,10 @@ import {
   createProperty,
   deleteProperty,
   getProperty,
+  getPublicProperty,
   listProperties,
+  listPublicProperties,
+  listPublicPropertyUnits,
   updateProperty,
 } from "./propertiesApi.js";
 
@@ -45,6 +48,41 @@ test("property list sends pagination, search, and authorization", async () => {
   );
   assert.equal(requestedHeaders.Authorization, "Bearer test-token");
   assert.deepEqual(result.pagination, { page: 2 });
+});
+
+test("public search and property detail use the public listing endpoints", async () => {
+  mockBrowser();
+  const calls = [];
+  globalThis.fetch = async (url) => {
+    calls.push(url);
+    if (url.includes("/units")) {
+      return mockResponse({ units: [{ id: 11 }] });
+    }
+    if (url.includes("?")) {
+      return mockResponse({ properties: [], pagination: { total: 0 } });
+    }
+    return mockResponse({ property: { id: 7 } });
+  };
+
+  await listPublicProperties({
+    city: "Nairobi",
+    minRent: "500",
+    bedrooms: "2",
+    available: "true",
+  });
+  assert.deepEqual(await getPublicProperty(7), { id: 7 });
+  assert.deepEqual(await listPublicPropertyUnits(7), { units: [{ id: 11 }] });
+  assert.equal(
+    calls[0],
+    "/api/properties/public?page=1&per_page=10&city=Nairobi&min_rent=500&bedrooms=2&available=true"
+  );
+  assert.deepEqual(calls.slice(1), [
+    "/api/properties/public/7",
+    "/api/properties/public/7/units",
+  ]);
+
+  delete globalThis.localStorage;
+  delete globalThis.fetch;
 });
 
 test("property API exposes CRUD operations and surfaces API errors", async () => {

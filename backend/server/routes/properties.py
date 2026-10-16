@@ -1,10 +1,13 @@
+import math
+from datetime import date
+
 from flask import Blueprint, request
 from flask_jwt_extended import get_jwt_identity, jwt_required
-from sqlalchemy import or_
+from sqlalchemy import exists, or_
 
 from server.extensions import db
 from server.models import Property, User
-from server.models_unit_lease import Unit
+from server.models_unit_lease import Lease, Unit, current_leases
 from server.pagination import get_pagination, pagination_metadata
 
 
@@ -31,7 +34,11 @@ def get_current_user():
 
 
 def owned_properties_query(user):
-    """Properties this user may see: all for admins, only their own otherwise."""
+    """Properties this user may see.
+
+    Managers can only see their own properties. Tenant users and public browsing
+    should use the all-properties query through the optional `scope` argument.
+    """
     query = Property.query
 
     if user.role != "admin":
@@ -134,6 +141,118 @@ def list_properties():
 
     return {
         "properties": [prop.to_dict() for prop in result.items],
+        "pagination": pagination_metadata(result),
+    }, 200
+
+
+@properties_bp.route("/public", methods=["GET"])
+def list_public_properties():
+    pagination, error = get_pagination()
+    if error:
+        return {"error": error}, 400
+
+    query = Property.query
+    search = request.args.get("q", "").strip()
+    city = request.args.get("city", "").strip()
+    if len(search) > 120:
+        return {"error": "Search query must be 120 characters or fewer"}, 400
+    if len(city) > 100:
+        return {"error": "City must be 100 characters or fewer"}, 400
+    if search:
+        pattern = f"%{search}%"
+        query = query.filter(
+            or_(
+                Property.name.ilike(pattern),
+                Property.address.ilike(pattern),
+                Property.city.ilike(pattern),
+                Property.state.ilike(pattern),
+                Property.zip_code.ilike(pattern),
+            )
+        )
+    if city:
+        query = query.filter(Property.city.ilike(f"%{city}%"))
+
+    min_rent = request.args.get("min_rent")
+    max_rent = request.args.get("max_rent")
+    bedrooms = request.args.get("bedrooms")
+    available = request.args.get("available")
+    unit_filter = Unit.query.filter(Unit.property_id == Property.id)
+    try:
+        if min_rent is not None:
+            min_rent_value = float(min_rent)
+            if not math.isfinite(min_rent_value) or min_rent_value < 0:
+                raise ValueError
+            unit_filter = unit_filter.filter(Unit.rent_amount >= min_rent_value)
+        if max_rent is not None:
+            max_rent_value = float(max_rent)
+            if not math.isfinite(max_rent_value) or max_rent_value < 0:
+                raise ValueError
+            unit_filter = unit_filter.filter(Unit.rent_amount <= max_rent_value)
+    except ValueError:
+        return {"error": "Rent filters must be non-negative numbers"}, 400
+
+    if min_rent is not None and max_rent is not None:
+        if min_rent_value > max_rent_value:
+            return {"error": "min_rent must not exceed max_rent"}, 400
+    if bedrooms is not None:
+        try:
+            bedroom_count = int(bedrooms)
+            if bedroom_count < 0:
+                raise ValueError
+        except ValueError:
+            return {"error": "bedrooms must be a non-negative integer"}, 400
+        unit_filter = unit_filter.filter(Unit.bedrooms == bedroom_count)
+    if available is not None:
+        if available.lower() not in {"true", "false"}:
+            return {"error": "available must be true or false"}, 400
+        if available.lower() == "true":
+            unit_filter = unit_filter.filter(
+                ~exists().where(
+                    Lease.unit_id == Unit.id,
+                    Lease.status == "active",
+                    Lease.start_date <= date.today(),
+                    Lease.end_date >= date.today(),
+                )
+            )
+    if any(value is not None for value in (min_rent, max_rent, bedrooms, available)):
+        query = query.filter(unit_filter.exists())
+
+    page, per_page = pagination
+    result = query.order_by(Property.created_at.desc(), Property.id.desc()).paginate(
+        page=page, per_page=per_page, error_out=False
+    )
+    return {
+        "properties": [prop.to_dict() for prop in result.items],
+        "pagination": pagination_metadata(result),
+    }, 200
+
+
+@properties_bp.route("/public/<int:property_id>", methods=["GET"])
+def get_public_property(property_id):
+    prop = db.session.get(Property, property_id)
+    if not prop:
+        return {"error": "Property not found"}, 404
+    return {"property": prop.to_dict()}, 200
+
+
+@properties_bp.route("/public/<int:property_id>/units", methods=["GET"])
+def list_public_property_units(property_id):
+    prop = db.session.get(Property, property_id)
+    if not prop:
+        return {"error": "Property not found"}, 404
+
+    pagination, error = get_pagination()
+    if error:
+        return {"error": error}, 400
+    page, per_page = pagination
+    result = (
+        Unit.query.filter_by(property_id=property_id)
+        .order_by(Unit.unit_number, Unit.id)
+        .paginate(page=page, per_page=per_page, error_out=False)
+    )
+    leases = current_leases([unit.id for unit in result.items])
+    return {
+        "units": [unit.to_dict(leases.get(unit.id)) for unit in result.items],
         "pagination": pagination_metadata(result),
     }, 200
 

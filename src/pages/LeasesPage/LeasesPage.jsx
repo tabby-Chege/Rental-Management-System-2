@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { createLease, deleteLease, listLeases, updateLease } from "../../api/leasesAPI";
 import { listTenants } from "../../api/tenantsApi";
 import { listProperties, listUnits } from "../../api/unitsAPI";
@@ -155,6 +156,7 @@ function LeaseForm({ initial, units, properties, tenants, isEdit, submitLabel, o
 }
 
 function LeasesPage() {
+  const [searchParams] = useSearchParams();
   const [leases, setLeases] = useState([]);
   const [units, setUnits] = useState([]);
   const [properties, setProperties] = useState([]);
@@ -162,6 +164,13 @@ function LeasesPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState("");
   const [editingId, setEditingId] = useState(null);
+  const initialForm = {
+    ...EMPTY_FORM,
+    unit_id: searchParams.get("unit_id") ?? "",
+    tenant_id: searchParams.get("tenant_id") ?? "",
+    start_date: searchParams.get("start_date") ?? "",
+    monthly_rent: searchParams.get("monthly_rent") ?? "",
+  };
 
   useEffect(() => {
     let ignore = false;
@@ -245,7 +254,8 @@ function LeasesPage() {
         )}
         {!isLoading && canAdd && (
           <LeaseForm
-            initial={EMPTY_FORM}
+            key={searchParams.toString()}
+            initial={initialForm}
             units={units}
             properties={properties}
             tenants={tenants}

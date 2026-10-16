@@ -1,5 +1,5 @@
 // Shared fetch helper for the units and leases API files.
-// Same behaviour as tenantsAPI.js: Bearer token from localStorage, {"error": "..."} messages.
+// Same behaviour as tenantsAPI.js: reads token from localStorage, {"error": "..."} messages.
 const BASE_URL = import.meta.env.VITE_API_URL || "";
 export const TOKEN_KEY = "access_token";
 

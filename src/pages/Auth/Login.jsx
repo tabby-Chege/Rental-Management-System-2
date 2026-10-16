@@ -26,12 +26,16 @@ function Login() {
     setLoading(true);
 
     try {
-      await loginUser({
+      const response = await loginUser({
         email: formData.email.trim(),
         password: formData.password,
       });
 
-      navigate("/manage/properties", { replace: true });
+      if (response.user?.role === "tenant") {
+        navigate("/tenant/details", { replace: true });
+      } else {
+        navigate("/manage/properties", { replace: true });
+      }
     } catch (err) {
       setError(err.message || "Login failed. Please check your details.");
     } finally {
@@ -44,7 +48,7 @@ function Login() {
       <div className="auth-card">
         <h1>Welcome back</h1>
         <p className="auth-description">
-          Log in to manage your rental property records.
+          Log in to continue to your rental workspace.
         </p>
 
         {error && (

@@ -87,10 +87,11 @@ All API responses are JSON. Protected routes require `Authorization: Bearer <acc
 | **Properties** | `GET/POST /api/properties`; `GET/PUT/DELETE /api/properties/<id>` | Authenticated users; results and changes are limited to owned records, except admins. |
 | **Tenants** | `GET/POST /api/tenants`; `GET/PUT/DELETE /api/tenants/<id>` | Landlords manage their own tenant records; linked tenants may view their own record and update permitted contact fields. |
 | **Units** | `GET/POST /api/properties/<property_id>/units`; `PUT/DELETE /api/units/<id>` | Owning landlord or admin; deletion is blocked when a unit has lease history. |
+| **Applications** | `GET/POST /api/applications`; `GET/PATCH /api/applications/<id>` | Tenants submit and view their own applications; landlords view applications for their units and approve or decline them. Approval links the applicant account to a tenant record and returns lease-form prefill values. |
 | **Leases** | `POST /api/leases`; `DELETE /api/leases/<id>` | Owning landlord or admin; ending a lease is represented as deactivation to preserve history. |
 | **Payments** | `GET/POST /payments` | Landlords see/manage payments for their properties; tenants can view payments linked to their lease. |
 
-Collection endpoints for properties, tenants, units, and payments support `page` and `per_page`, defaulting to page 1 and 10 records per page (maximum 100). For example: `GET /api/properties?page=2&per_page=10&q=Oak&city=Nairobi`. Paginated responses include the resource list and metadata (`page`, `per_page`, `total`, `pages`, `has_next`, and `has_prev`). Invalid pagination parameters return HTTP 400. Validation, authorization, missing records, and conflicts return an error message and an appropriate HTTP status.
+Collection endpoints for properties, tenants, units, applications, and payments support `page` and `per_page`, defaulting to page 1 and 10 records per page (maximum 100). For example: `GET /api/properties?page=2&per_page=10&q=Oak&city=Nairobi`. Paginated responses include the resource list and metadata (`page`, `per_page`, `total`, `pages`, `has_next`, and `has_prev`). Invalid pagination parameters return HTTP 400. Validation, authorization, missing records, and conflicts return an error message and an appropriate HTTP status.
 
 ## Testing and Quality Checks
 

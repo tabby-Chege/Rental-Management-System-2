@@ -33,6 +33,47 @@
   display: block;
 }
 
+.tenant-residences {
+  display: grid;
+  justify-content: stretch;
+}
+
+.tenant-residences h2,
+.tenant-residence h3 {
+  margin: 0;
+}
+
+.tenant-residence {
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+}
+
+.tenant-residence p {
+  margin: 8px 0;
+}
+
+.tenant-residence dl {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 12px;
+  margin: 16px 0;
+}
+
+.tenant-residence dl div {
+  display: grid;
+  gap: 4px;
+}
+
+.tenant-residence dt {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.tenant-residence dd {
+  margin: 0;
+  font-weight: 600;
+}
+
 .manage-list {
   display: grid;
   gap: 12px;
@@ -123,9 +164,20 @@
 }
 
 .manage-badge.is-ended,
-.manage-badge.is-terminated {
+.manage-badge.is-terminated,
+.manage-badge.is-declined {
   background: #ececec;
   color: #444;
+}
+
+.manage-badge.is-pending {
+  background: #fff3cd;
+  color: #785900;
+}
+
+.manage-badge.is-approved {
+  background: #e3f3e8;
+  color: #17592f;
 }
 
 .manage-status {

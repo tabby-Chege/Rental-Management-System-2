@@ -24,11 +24,16 @@ async function authRequest(endpoint, values = {}, requiresToken = false) {
     headers.Authorization = `Bearer ${token}`;
   }
 
-  const response = await fetch(`${API_URL}${endpoint}`, {
-    method: endpoint === "/me" ? "GET" : "POST",
-    headers,
-    ...(endpoint === "/me" ? {} : { body: JSON.stringify(values) }),
-  });
+  let response;
+  try {
+    response = await fetch(`${API_URL}${endpoint}`, {
+      method: endpoint === "/me" ? "GET" : "POST",
+      headers,
+      ...(endpoint === "/me" ? {} : { body: JSON.stringify(values) }),
+    });
+  } catch {
+    throw new Error("Could not reach the API server. Please try again.");
+  }
 
   let data = {};
 
@@ -48,11 +53,9 @@ async function authRequest(endpoint, values = {}, requiresToken = false) {
 export async function registerUser(values) {
   const data = await authRequest("/register", values);
 
-  if (!data.access_token) {
-    throw new Error("Registration response did not include an access token.");
+  if (!data.user) {
+    throw new Error("Registration response did not include the created user.");
   }
-
-  saveToken(data.access_token);
   return data;
 }
 

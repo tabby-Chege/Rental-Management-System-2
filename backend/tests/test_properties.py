@@ -102,6 +102,46 @@ def test_property_pagination_rejects_invalid_parameters(client, world):
     assert "error" in response.get_json()
 
 
+def test_public_property_search_includes_other_owners_and_city_filters(client, world):
+    owned = create_property(client, world["landlord"], "Nairobi home")
+    other = create_property(client, world["other"], "Mombasa home", city="Mombasa")
+    assert owned.status_code == other.status_code == 201
+
+    response = client.get("/api/properties/public?city=Nairobi")
+    assert response.status_code == 200
+    properties = response.get_json()["properties"]
+    assert [prop["name"] for prop in properties] == ["Nairobi home"]
+
+    all_properties = client.get("/api/properties/public").get_json()["properties"]
+    assert {prop["name"] for prop in all_properties} == {
+        "Nairobi home",
+        "Mombasa home",
+    }
+
+
+def test_public_property_units_and_filters(client, world):
+    property_id = create_property(
+        client, world["landlord"], "Public listing"
+    ).get_json()["property"]["id"]
+    created = client.post(
+        f"/api/properties/{property_id}/units",
+        headers=world["landlord"],
+        json={"unit_number": "A1", "bedrooms": 2, "rent_amount": 1200},
+    )
+    assert created.status_code == 201
+
+    result = client.get(
+        f"/api/properties/public?bedrooms=2&min_rent=1000&max_rent=1500"
+    )
+    assert result.status_code == 200
+    assert [prop["id"] for prop in result.get_json()["properties"]] == [property_id]
+
+    units = client.get(f"/api/properties/public/{property_id}/units")
+    assert units.status_code == 200
+    assert units.get_json()["units"][0]["unit_number"] == "A1"
+    assert client.get("/api/properties/public?bedrooms=-1").status_code == 400
+
+
 def test_registration_creates_non_admin_landlord(client):
     response = client.post(
         "/api/auth/register",

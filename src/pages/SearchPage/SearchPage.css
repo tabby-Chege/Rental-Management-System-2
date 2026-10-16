@@ -46,6 +46,33 @@
   outline-offset: 2px;
 }
 
+.search-filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 12px;
+  margin: -12px 0 28px;
+}
+
+.search-filters label {
+  display: grid;
+  gap: 6px;
+  color: #4b5563;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.search-filters input,
+.search-filters select {
+  min-width: 130px;
+  padding: 9px 12px;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  background: #fff;
+  color: #111827;
+  font: inherit;
+}
+
 .error-message {
   display: flex;
   align-items: center;

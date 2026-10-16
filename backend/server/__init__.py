@@ -10,8 +10,10 @@ from server.routes.properties import properties_bp
 from server.routes.units import units_bp
 from server.routes.leases import leases_bp
 from server.models import User, Property
+from server.models_application import Application
 from server.models_tenant import Tenant
 from server.models_unit_lease import Unit, Lease
+from server.routes.applications import applications_bp
 
 
 def create_app():
@@ -30,6 +32,7 @@ def create_app():
     app.register_blueprint(units_bp, url_prefix='/api')
     app.register_blueprint(leases_bp, url_prefix='/api')
     app.register_blueprint(tenants_bp)
+    app.register_blueprint(applications_bp)
 
     @app.route("/api/health")
     def health():

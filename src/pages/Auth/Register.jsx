@@ -10,6 +10,7 @@ function Register() {
     email: "",
     password: "",
     confirmPassword: "",
+    role: "landlord",
   });
 
   const [error, setError] = useState("");
@@ -39,13 +40,18 @@ function Register() {
     setLoading(true);
 
     try {
-      await registerUser({
+      const response = await registerUser({
         name: formData.name.trim(),
         email: formData.email.trim(),
         password: formData.password,
+        role: formData.role,
       });
 
-      navigate("/manage/properties", { replace: true });
+      if (response.user?.role === "tenant") {
+        navigate("/login", { replace: true });
+      } else {
+        navigate("/login", { replace: true });
+      }
     } catch (err) {
       setError(err.message || "Registration failed. Please try again.");
     } finally {
@@ -58,7 +64,7 @@ function Register() {
       <div className="auth-card">
         <h1>Create your account</h1>
         <p className="auth-description">
-          Register to manage your rental property records.
+          Register as a landlord or a tenant to access the right workflow.
         </p>
 
         {error && (
@@ -89,6 +95,17 @@ function Register() {
             autoComplete="email"
             required
           />
+
+          <label htmlFor="role">Account type</label>
+          <select
+            id="role"
+            name="role"
+            value={formData.role}
+            onChange={handleChange}
+          >
+            <option value="landlord">Landlord</option>
+            <option value="tenant">Tenant</option>
+          </select>
 
           <label htmlFor="password">Password</label>
           <input

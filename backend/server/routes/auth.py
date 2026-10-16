@@ -22,10 +22,17 @@ def register():
     name = data.get("name")
     email = data.get("email")
     password = data.get("password")
+    role = data.get("role", "landlord")
 
     if not isinstance(name, str) or not isinstance(email, str) or not isinstance(password, str):
         return {"error": "Name, email, and password are required"}, 400
 
+    if isinstance(role, str):
+        role = role.strip().lower()
+    if role == "admin":
+        role = "landlord"
+    if role not in {"landlord", "tenant"}:
+        return {"error": "Role must be either landlord or tenant"}, 400
     name = name.strip()
     email = email.strip().lower()
     if not name or not email or not password:
@@ -56,7 +63,7 @@ def register():
     user = User(
         name=name,
         email=email,
-        role="landlord",
+        role=role,
     )
 
     user.set_password(password)

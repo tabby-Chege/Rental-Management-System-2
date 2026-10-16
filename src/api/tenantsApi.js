@@ -37,6 +37,14 @@ export async function listTenants(page = 1, perPage = 10) {
   return request(`?${params.toString()}`);
 }
 
+export async function getMyTenant() {
+  return request("/me");
+}
+
+export async function updateMyTenant(values) {
+  return request("/me", { method: "PUT", body: JSON.stringify(values) });
+}
+
 export async function createTenant(values) {
   return request("", { method: "POST", body: JSON.stringify(values) });
 }
