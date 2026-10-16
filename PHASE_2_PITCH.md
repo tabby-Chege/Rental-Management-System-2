@@ -6,10 +6,11 @@
 
 In Phase 2, I will extend this existing React app into a lightweight rental-management workspace, not start a new frontend. The existing navigation, search, property cards, and detail views will provide the foundation for authenticated, persistent records. A single searchable workspace will reduce repeated data entry and make portfolio information easier to maintain.
 
-**Goal:** Replace the Phase 1 public property-data integration with the app's own Flask API and PostgreSQL database. Let authenticated users manage properties and connect them to related rental records. This MVP focuses on property CRUD and core relationships; it does not claim verified rental availability or provide full accounting.
+**Goal:** Replace the Phase 1 public property-data integration with the app's own Flask API and PostgreSQL database. Let authenticated users manage their properties and tenant records, then connect them to units and leases. This MVP does not claim verified rental availability or provide full accounting.
 
 **User stories**
 - As a landlord, I want to create, view, edit, and delete my properties so my portfolio stays accurate.
+- As a landlord, I want to create, view, edit, and delete tenant contact records so my rental relationships stay current.
 - As a manager, I want to find a property and see its units and related rental records without searching separate files.
 - As a landlord, I want tenants and leases linked to the correct units so I can track occupancy and lease dates.
 - As a user, I want a clear error and a chance to retry when a request fails so I know whether my changes were saved.
@@ -21,12 +22,12 @@ RentCast will no longer supply the app's property records. The MVP will use the 
 I will use an iterative software development lifecycle: plan, design, build, test with feedback, and document. The high-level flow is **React page → API client (`fetch /api/...` with JWT) → Flask route → SQLAlchemy → PostgreSQL → JSON response → UI success/error state**.
 
 1. **Plan and research:** Review Phase 1 routes and data fields; define user stories, MVP acceptance checks, and API shapes. Research Flask/JWT, SQLAlchemy relationships, PostgreSQL setup, and Vite proxy/CORS where needed.
-2. **Design the data and API:** Use PostgreSQL with Flask-SQLAlchemy. Relationships: `User` 1-to-many `Property` (`Property.owner_id`); `Property` 1-to-many `Unit`; `Unit` 1-to-many `Lease`; `Tenant` 1-to-many `Lease`; `Lease` 1-to-many `Payment`. Foreign keys and validation preserve data integrity. Start with authenticated property list/detail/create/update/delete endpoints and ownership checks, then add one related-resource flow.
-3. **Build and test the backend:** Implement Flask JSON routes, JWT-protected access, SQLAlchemy persistence, and consistent error responses. Test successful CRUD, invalid input, missing records, unauthorized access, and database failures before integrating the UI.
-4. **Extend the existing React app:** Keep React, Vite, and React Router. Retain `App` navigation, `ProtectedRoute`, `Login`, and `Register`; connect the existing `SearchPage` and `PropertyDetailsPage`; use `ManagePropertiesPage` for property CRUD. Keep requests in API-client modules and use reusable property forms/cards and status/error UI. Use `useState` for form/request state and `useEffect` for loading. Replace RentCast calls with the Flask API. Show loading, empty, validation, and request-failure states, with retry where useful.
+2. **Design the data and API:** Use PostgreSQL with Flask-SQLAlchemy. Relationships: `User` 1-to-many `Property` (`Property.owner_id`) and `Tenant` (`Tenant.landlord_id`); `Property` 1-to-many `Unit`; `Unit` and `Tenant` connect through `Lease`; `Lease` 1-to-many `Payment`. Foreign keys and validation preserve data integrity. Implement authenticated property and tenant CRUD with owner checks, then connect units and leases.
+3. **Build and test the backend:** Implement Flask JSON routes, JWT-protected access, SQLAlchemy persistence, pagination, and consistent error responses. Test successful CRUD, invalid input, missing records, unauthorized access, and relationship rules before integrating the UI.
+4. **Extend the existing React app:** Keep React, Vite, and React Router. Retain the app shell, `ProtectedRoute`, `Login`, and `Register`; connect the property search/detail and existing property, tenant, unit, and lease management pages to the Flask API. Keep requests in API-client modules and reuse form and status/error patterns. Use `useState` for form/request state and `useEffect` for loading. Replace RentCast calls with the Flask API. Show loading, empty, validation, and request-failure states, with retry where useful.
 5. **Verify and deliver:** Test sign-in and the browser CRUD journey, confirm related records link correctly, request peer critique, and fix the highest-impact issues. Run tests, lint, and production build; document setup, API/models, and limitations in the README; prepare the presentation and reflection.
 
-**Rubric fit:** Full property CRUD is the MVP; the `User`–`Property` and additional rental-resource relationships meet the relational-data requirement. Preserving and extending the React UI supports a coherent experience. API and browser tests cover failed requests. README, presentation, and reflection document setup, design, and learning. External API integration is optional and intentionally excluded from the MVP.
+**Rubric fit:** Full property and tenant CRUD provide two authenticated, owner-scoped relational resources. The `User`–`Property`, `User`–`Tenant`, and property/unit/lease relationships meet the data-model requirements. Preserving and extending the React UI supports a coherent experience. API and browser checks cover failed requests. README, presentation, and reflection document setup, design, and learning. External API integration is optional and intentionally excluded from the MVP.
 
 ## Step 3: Timeline and Scope
 
@@ -40,7 +41,7 @@ I will use an iterative software development lifecycle: plan, design, build, tes
 | **Debugging, testing, and iteration** | **3 days** | Test API and browser success/failure cases; fix integration bugs; get peer critique and apply priority feedback; run project checks. **Milestone:** reliable demo. |
 | **README, presentation, reflection** | **2 days** | Document installation, environment/database setup, API, and limitations; prepare demo and reflect on trade-offs and next steps. **Milestone:** reproducible final submission. |
 
-**In scope:** existing Phase 1 React app; Flask; PostgreSQL via SQLAlchemy; authentication and user-owned property records; full property CRUD; at least two related resources; replacing the public property API; validation and visible request-error handling.
+**In scope:** existing Phase 1 React app; Flask; PostgreSQL via SQLAlchemy; authentication and user-owned records; full property and tenant CRUD; related units and leases; replacing the public property API; pagination, validation, and visible request-error handling.
 
 **Out of scope:** payment processing/bookkeeping, maintenance tickets, notifications, AI recommendations, verified availability, and production hosting.
 

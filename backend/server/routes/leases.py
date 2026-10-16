@@ -1,17 +1,20 @@
+import math
 from datetime import date
 
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, request
 from flask_jwt_extended import get_jwt_identity, jwt_required
+from sqlalchemy.exc import IntegrityError
 
 from server.extensions import db
-from server.helpers import parse_decimal, parse_int
-from server.models import Property, User
+from server.models import Payment, Property, User
 from server.models_tenant import Tenant
 from server.models_unit_lease import LEASE_STATUSES, Lease, Unit
 from server.pagination import get_pagination, pagination_metadata
 
 leases_bp = Blueprint("leases_bp", __name__, url_prefix="/api/leases")
 MANAGER_ROLES = {"landlord", "admin"}
+MONEY_FIELDS = {"monthly_rent", "deposit"}
+
 
 
 def current_user():
@@ -21,226 +24,304 @@ def current_user():
         return None
 
 
-def accessible_unit_query(user):
-    query = Unit.query.join(Property)
+
+def accessible_units_query(user):
+    query = Unit.query.join(Property, Unit.property_id == Property.id)
     if user.role != "admin":
         query = query.filter(Property.owner_id == user.id)
     return query
 
 
-def accessible_lease_query(user):
-    query = Lease.query.join(Unit).join(Property)
+def accessible_leases_query(user):
+    query = Lease.query.join(Unit, Lease.unit_id == Unit.id).join(
+        Property, Unit.property_id == Property.id
+    )
     if user.role != "admin":
         query = query.filter(Property.owner_id == user.id)
     return query
 
 
-def tenant_is_accessible(user, tenant_id):
-    query = Tenant.query.filter_by(id=tenant_id)
-    if user.role != "admin":
-        query = query.filter_by(landlord_id=user.id)
-    return query.first()
+def tenant_for_property_owner(tenant_id, owner_id):
+    return Tenant.query.filter_by(id=tenant_id, landlord_id=owner_id).first()
 
 
-def lease_payload(lease):
+def valid_amount(value, field, *, allow_zero=False):
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, (int, float))
+        or not math.isfinite(value)
+        or value < 0
+        or (not allow_zero and value == 0)
+    ):
+        return f"{field} must be a valid {'non-negative' if allow_zero else 'positive'} amount"
+    return None
+
+
+def lease_json(lease):
     return lease.to_dict()
 
 
-def parse_lease_data(data, partial=False):
-    if not isinstance(data, dict):
-        return None, "Request body must be a JSON object"
+def list_leases_for_query(query):
+    pagination, error = get_pagination()
+    if error:
+        return {"error": error}, 400
+    page, per_page = pagination
+    result = query.order_by(Lease.created_at.desc(), Lease.id.desc()).paginate(
+        page=page, per_page=per_page, error_out=False
+    )
+    return {
+        "leases": [lease_json(lease) for lease in result.items],
+        "pagination": pagination_metadata(result),
+    }, 200
+
+
+@leases_bp.route("", methods=["GET"])
+@jwt_required()
+def list_leases():
+    user = current_user()
+    if not user:
+        return {"error": "User not found"}, 404
+    if user.role not in MANAGER_ROLES:
+        return {"error": "You do not have permission to view leases"}, 403
+
+    query = accessible_leases_query(user)
+    for field, column in (("tenant_id", Lease.tenant_id), ("unit_id", Lease.unit_id)):
+        raw_value = request.args.get(field)
+        if raw_value is not None:
+            if not raw_value.isdecimal() or int(raw_value) < 1:
+                return {"error": f"{field} must be a positive integer"}, 400
+            query = query.filter(column == int(raw_value))
+    status = request.args.get("status")
+    if status:
+        if status not in LEASE_STATUSES:
+            return {"error": "status must be active, ended, or terminated"}, 400
+        query = query.filter(Lease.status == status)
+    return list_leases_for_query(query)
+
+
+@leases_bp.route("/mine", methods=["GET"])
+@jwt_required()
+def list_my_leases():
+    user = current_user()
+    if not user:
+        return {"error": "User not found"}, 404
+    if user.role != "tenant":
+        return {"error": "This route is for tenant accounts"}, 403
+    tenant = Tenant.query.filter_by(user_id=user.id).first()
+    query = Lease.query.filter_by(tenant_id=tenant.id) if tenant else Lease.query.filter(False)
+    return list_leases_for_query(query)
+
+
+@leases_bp.route("/mine/payments", methods=["GET"])
+@jwt_required()
+def list_my_payments():
+    user = current_user()
+    if not user:
+        return {"error": "User not found"}, 404
+    if user.role != "tenant":
+        return {"error": "This route is for tenant accounts"}, 403
+    tenant = Tenant.query.filter_by(user_id=user.id).first()
+    if not tenant:
+        return {"payments": []}, 200
+
+    query = Payment.query.join(Lease, Payment.lease_id == Lease.id).filter(
+        Lease.tenant_id == tenant.id
+    )
+    raw_lease_id = request.args.get("lease_id")
+    if raw_lease_id:
+        if not raw_lease_id.isdecimal() or int(raw_lease_id) < 1:
+            return {"error": "lease_id must be a positive integer"}, 400
+        query = query.filter(Lease.id == int(raw_lease_id))
+    pagination, error = get_pagination()
+    if error:
+        return {"error": error}, 400
+    page, per_page = pagination
+    result = query.order_by(Payment.payment_date.desc(), Payment.id.desc()).paginate(
+        page=page, per_page=per_page, error_out=False
+    )
+    return {
+        "payments": [payment.to_dict() for payment in result.items],
+        "pagination": pagination_metadata(result),
+    }, 200
+
+
+@leases_bp.route("/<int:lease_id>", methods=["GET"])
+@jwt_required()
+def get_lease(lease_id):
+    user = current_user()
+    if not user:
+        return {"error": "User not found"}, 404
+    lease = accessible_leases_query(user).filter(Lease.id == lease_id).first()
+    if not lease and user.role == "tenant":
+        tenant = Tenant.query.filter_by(user_id=user.id).first()
+        if tenant:
+            lease = Lease.query.filter_by(id=lease_id, tenant_id=tenant.id).first()
+    if not lease:
+        return {"error": "Lease not found"}, 404
+    return {"lease": lease_json(lease)}, 200
+
+
+def validate_lease_payload(data, *, partial=False):
+    if not isinstance(data, dict) or (partial and not data):
+        return None, "Request body must be a JSON object with lease fields"
     allowed = {
-        "unit_id", "tenant_id", "start_date", "end_date", "monthly_rent",
+        "tenant_id", "start_date", "end_date", "monthly_rent",
         "deposit", "deposit_amount", "status",
     }
     unknown = set(data) - allowed
     if unknown:
         return None, "Unsupported fields: " + ", ".join(sorted(unknown))
-    values = {}
-    if "unit_id" in data:
-        unit_id, error = parse_int(data["unit_id"], "unit_id", maximum=2**31 - 1)
-        if error or unit_id < 1:
-            return None, error or "unit_id must be positive"
-        values["unit_id"] = unit_id
-    elif not partial:
-        return None, "unit_id is required"
-    if "tenant_id" in data:
-        tenant_id, error = parse_int(data["tenant_id"], "tenant_id", maximum=2**31 - 1)
-        if error or tenant_id < 1:
-            return None, error or "tenant_id must be positive"
-        values["tenant_id"] = tenant_id
-    elif not partial:
-        return None, "tenant_id is required"
+
+    cleaned = dict(data)
+    if "deposit_amount" in cleaned:
+        if "deposit" in cleaned:
+            return None, "Send either deposit or deposit_amount, not both"
+        cleaned["deposit"] = cleaned.pop("deposit_amount")
+
+    for field in ("tenant_id",):
+        if field in cleaned and (
+            isinstance(cleaned[field], bool)
+            or not isinstance(cleaned[field], int)
+            or cleaned[field] < 1
+        ):
+            return None, f"{field} must be a positive integer"
     for field in ("start_date", "end_date"):
-        if field in data:
+        if field in cleaned:
             try:
-                values[field] = date.fromisoformat(data[field])
-            except (TypeError, ValueError):
-                return None, f"{field} must be a date in YYYY-MM-DD format"
-        elif not partial:
-            return None, f"{field} is required"
-    for field in ("monthly_rent", "deposit", "deposit_amount"):
-        if field in data:
-            value, error = parse_decimal(data[field], field)
-            if error:
-                return None, error
-            values["deposit" if field == "deposit_amount" else field] = value
-    if not partial and "monthly_rent" not in values:
-        return None, "monthly_rent is required"
-    if not partial and "deposit" not in values:
-        values["deposit"] = 0
-    if "status" in data:
-        if data["status"] not in LEASE_STATUSES:
-            return None, f"status must be one of: {', '.join(LEASE_STATUSES)}"
-        values["status"] = data["status"]
-    elif not partial:
-        values["status"] = "active"
-    if "start_date" in values and "end_date" in values:
-        if values["end_date"] < values["start_date"]:
-            return None, "end_date must be on or after start_date"
-    return values, None
-
-
-@leases_bp.route("/leases", methods=["GET"])
-@jwt_required()
-def list_leases():
-    user = current_user()
-    if not user:
-        return jsonify({"error": "User not found"}), 404
-    query = accessible_lease_query(user)
-    if user.role == "tenant":
-        tenant = Tenant.query.filter_by(user_id=user.id).first()
-        if not tenant:
-            return jsonify({"leases": [], "pagination": None}), 200
-        query = query.filter(Lease.tenant_id == tenant.id)
-    elif user.role not in MANAGER_ROLES:
-        return jsonify({"error": "You do not have permission to view leases"}), 403
-
-    for key, column in (("tenant_id", Lease.tenant_id), ("unit_id", Lease.unit_id)):
-        raw = request.args.get(key)
-        if raw is not None:
-            try:
-                value = int(raw)
+                if not isinstance(cleaned[field], str):
+                    raise ValueError
+                cleaned[field] = date.fromisoformat(cleaned[field])
             except ValueError:
-                return jsonify({"error": f"{key} must be a positive integer"}), 400
-            if value < 1:
-                return jsonify({"error": f"{key} must be a positive integer"}), 400
-            query = query.filter(column == value)
-    status = request.args.get("status")
-    if status:
-        if status not in LEASE_STATUSES:
-            return jsonify({"error": "Invalid lease status"}), 400
-        query = query.filter(Lease.status == status)
-    pagination, error = get_pagination()
-    if error:
-        return jsonify({"error": error}), 400
-    page, per_page = pagination
-    result = query.order_by(Lease.created_at.desc(), Lease.id.desc()).paginate(
-        page=page, per_page=per_page, error_out=False
+                return None, f"{field} must use YYYY-MM-DD format"
+    for field in MONEY_FIELDS:
+        if field in cleaned:
+            message = valid_amount(
+                cleaned[field], field, allow_zero=(field == "deposit")
+            )
+            if message:
+                return None, message
+    if "status" in cleaned and cleaned["status"] not in LEASE_STATUSES:
+        return None, "status must be active, ended, or terminated"
+    if not partial:
+        required = {"tenant_id", "start_date", "end_date", "monthly_rent"}
+        missing = required - cleaned.keys()
+        if missing:
+            return None, "Missing required lease fields: " + ", ".join(sorted(missing))
+        cleaned.setdefault("deposit", 0)
+        cleaned.setdefault("status", "active")
+    if "start_date" in cleaned and "end_date" in cleaned:
+        if cleaned["end_date"] <= cleaned["start_date"]:
+            return None, "End date must occur after the start date"
+    return cleaned, None
+
+
+def lease_conflicts(unit_id, start_date, end_date, exclude_id=None):
+    query = Lease.query.filter(
+        Lease.unit_id == unit_id,
+        Lease.status == "active",
+        Lease.start_date <= end_date,
+        Lease.end_date >= start_date,
     )
-    return jsonify({
-        "leases": [lease_payload(lease) for lease in result.items],
-        "pagination": pagination_metadata(result),
-    }), 200
+    if exclude_id is not None:
+        query = query.filter(Lease.id != exclude_id)
+    return query.first() is not None
 
 
-@leases_bp.route("/leases", methods=["POST"])
+@leases_bp.route("", methods=["POST"])
 @jwt_required()
 def create_lease():
     user = current_user()
     if not user:
-        return jsonify({"error": "User not found"}), 404
+        return {"error": "User not found"}, 404
     if user.role not in MANAGER_ROLES:
-        return jsonify({"error": "Only landlords and admins can create leases"}), 403
-    values, error = parse_lease_data(request.get_json(silent=True))
-    if error:
-        return jsonify({"error": error}), 400
-    unit = accessible_unit_query(user).filter(Unit.id == values["unit_id"]).first()
+        return {"error": "Only landlords and admins can create leases"}, 403
+
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return {"error": "Request body must be valid JSON"}, 400
+    unit_id = data.get("unit_id")
+    if isinstance(unit_id, bool) or not isinstance(unit_id, int) or unit_id < 1:
+        return {"error": "unit_id must be a positive integer"}, 400
+    unit = accessible_units_query(user).filter(Unit.id == unit_id).first()
     if not unit:
-        return jsonify({"error": "Unit not found"}), 404
-    if not tenant_is_accessible(user, values["tenant_id"]):
-        return jsonify({"error": "Tenant not found"}), 404
-    if values["status"] == "active":
-        overlap = Lease.query.filter(
-            Lease.unit_id == unit.id,
-            Lease.status == "active",
-            Lease.start_date <= values["end_date"],
-            Lease.end_date >= values["start_date"],
-        ).first()
-        if overlap:
-            return jsonify({"error": "Unit is already leased during this timeframe"}), 409
-    lease = Lease(**values)
+        return {"error": "Unit not found"}, 404
+    prop = db.session.get(Property, unit.property_id)
+    payload = {key: value for key, value in data.items() if key != "unit_id"}
+    cleaned, error = validate_lease_payload(payload)
+    if error:
+        return {"error": error}, 400
+    tenant = tenant_for_property_owner(cleaned["tenant_id"], prop.owner_id)
+    if not tenant:
+        return {"error": "Tenant not found for this property owner"}, 404
+    if cleaned["status"] == "active" and lease_conflicts(
+        unit.id, cleaned["start_date"], cleaned["end_date"]
+    ):
+        return {"error": "Unit is already leased during this timeframe"}, 409
+
+    lease = Lease(unit_id=unit.id, **cleaned)
     db.session.add(lease)
-    db.session.commit()
-    return jsonify(lease_payload(lease)), 201
+    try:
+        db.session.commit()
+    except IntegrityError:
+        db.session.rollback()
+        return {"error": "Lease conflicts with existing records"}, 409
+    serialized = lease_json(lease)
+    return {"lease": serialized, **serialized}, 201
 
 
-@leases_bp.route("/leases/<int:lease_id>", methods=["GET"])
-@jwt_required()
-def get_lease(lease_id):
-    user = current_user()
-    if not user:
-        return jsonify({"error": "User not found"}), 404
-    if user.role not in MANAGER_ROLES and user.role != "tenant":
-        return jsonify({"error": "You do not have permission to view leases"}), 403
-    query = accessible_lease_query(user).filter(Lease.id == lease_id)
-    if user.role == "tenant":
-        tenant = Tenant.query.filter_by(user_id=user.id).first()
-        query = query.filter(Lease.tenant_id == tenant.id if tenant else False)
-    lease = query.first()
-    if not lease:
-        return jsonify({"error": "Lease not found"}), 404
-    return jsonify(lease_payload(lease)), 200
-
-
-@leases_bp.route("/leases/<int:lease_id>", methods=["PUT"])
+@leases_bp.route("/<int:lease_id>", methods=["PUT"])
 @jwt_required()
 def update_lease(lease_id):
     user = current_user()
     if not user:
-        return jsonify({"error": "User not found"}), 404
+        return {"error": "User not found"}, 404
     if user.role not in MANAGER_ROLES:
-        return jsonify({"error": "Only landlords and admins can update leases"}), 403
-    lease = accessible_lease_query(user).filter(Lease.id == lease_id).first()
+        return {"error": "Only landlords and admins can update leases"}, 403
+    lease = accessible_leases_query(user).filter(Lease.id == lease_id).first()
     if not lease:
-        return jsonify({"error": "Lease not found"}), 404
-    values, error = parse_lease_data(request.get_json(silent=True), partial=True)
+        return {"error": "Lease not found"}, 404
+    cleaned, error = validate_lease_payload(request.get_json(silent=True), partial=True)
     if error:
-        return jsonify({"error": error}), 400
-    if "unit_id" in values and values["unit_id"] != lease.unit_id:
-        return jsonify({"error": "A lease cannot be moved to another unit"}), 400
-    if "tenant_id" in values and not tenant_is_accessible(user, values["tenant_id"]):
-        return jsonify({"error": "Tenant not found"}), 404
-    start_date = values.get("start_date", lease.start_date)
-    end_date = values.get("end_date", lease.end_date)
-    status = values.get("status", lease.status)
-    if status == "active":
-        overlap = Lease.query.filter(
-            Lease.unit_id == lease.unit_id,
-            Lease.id != lease.id,
-            Lease.status == "active",
-            Lease.start_date <= end_date,
-            Lease.end_date >= start_date,
-        ).first()
-        if overlap:
-            return jsonify({"error": "Unit is already leased during this timeframe"}), 409
-    for field, value in values.items():
+        return {"error": error}, 400
+
+    tenant_id = cleaned.get("tenant_id", lease.tenant_id)
+    unit = db.session.get(Unit, lease.unit_id)
+    prop = db.session.get(Property, unit.property_id)
+    tenant = tenant_for_property_owner(tenant_id, prop.owner_id)
+    if not tenant:
+        return {"error": "Tenant not found for this property owner"}, 404
+    start_date = cleaned.get("start_date", lease.start_date)
+    end_date = cleaned.get("end_date", lease.end_date)
+    if end_date <= start_date:
+        return {"error": "End date must occur after the start date"}, 400
+    status = cleaned.get("status", lease.status)
+    if status == "active" and lease_conflicts(
+        lease.unit_id, start_date, end_date, exclude_id=lease.id
+    ):
+        return {"error": "Unit is already leased during this timeframe"}, 409
+
+    for field, value in cleaned.items():
         setattr(lease, field, value)
-    db.session.commit()
-    return jsonify(lease_payload(lease)), 200
+    try:
+        db.session.commit()
+    except IntegrityError:
+        db.session.rollback()
+        return {"error": "Lease conflicts with existing records"}, 409
+    serialized = lease_json(lease)
+    return {"lease": serialized, **serialized}, 200
 
 
-@leases_bp.route("/leases/<int:lease_id>", methods=["DELETE"])
+@leases_bp.route("/<int:lease_id>", methods=["DELETE"])
 @jwt_required()
-def delete_lease(lease_id):
+def terminate_lease(lease_id):
     user = current_user()
     if not user:
-        return jsonify({"error": "User not found"}), 404
+        return {"error": "User not found"}, 404
     if user.role not in MANAGER_ROLES:
-        return jsonify({"error": "Only landlords and admins can delete leases"}), 403
-    lease = accessible_lease_query(user).filter(Lease.id == lease_id).first()
+        return {"error": "Only landlords and admins can end leases"}, 403
+    lease = accessible_leases_query(user).filter(Lease.id == lease_id).first()
     if not lease:
-        return jsonify({"error": "Lease not found"}), 404
+        return {"error": "Lease not found"}, 404
     lease.status = "terminated"
     db.session.commit()
-    return jsonify({"message": "Lease terminated successfully"}), 200
+    return {"message": "Lease terminated successfully"}, 200

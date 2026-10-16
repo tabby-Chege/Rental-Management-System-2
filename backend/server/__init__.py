@@ -29,8 +29,8 @@ def create_app():
     app.register_blueprint(auth_bp)
     app.register_blueprint(payments_bp)
     app.register_blueprint(properties_bp)
-    app.register_blueprint(units_bp, url_prefix='/api')
-    app.register_blueprint(leases_bp, url_prefix='/api')
+    app.register_blueprint(units_bp)
+    app.register_blueprint(leases_bp)
     app.register_blueprint(tenants_bp)
     app.register_blueprint(applications_bp)
 

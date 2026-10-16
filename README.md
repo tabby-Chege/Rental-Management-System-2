@@ -4,11 +4,11 @@ Property Finder is a full-stack rental portfolio manager built by extending a Ph
 ## Features
 
 - Register and log in with JWT-based authentication.
-- Create, view, update, and delete property records.
-- Create, view, update, and delete tenant records.
+- Create, view, update, and delete property, tenant, and unit records.
+- Create and view leases, update their terms or status, and end them without losing lease history.
 - Associate records using relational database keys: users own properties and tenant records; properties have units; units and tenants connect through leases; leases connect to payments.
-- Restrict property and tenant access to the authenticated owner (with explicit role rules for tenant self-access and admins).
-- Paginate property and tenant lists and search properties by name, address, city, state, or postal code.
+- Restrict property, tenant, unit, lease, and payment access to the authenticated owner (with explicit role rules for tenant self-access and admins).
+- Paginate property, tenant, unit, lease, and payment lists and search properties by name, address, city, state, or postal code.
 - Show loading, empty, validation, and failed-request messages in the React UI.
 - Keep the Phase 1 React/Vite application and its existing navigation and property-search/detail experience while using the project's API for saved records.
 
@@ -86,12 +86,13 @@ All API responses are JSON. Protected routes require `Authorization: Bearer <acc
 |---|---|---|
 | **Properties** | `GET/POST /api/properties`; `GET/PUT/DELETE /api/properties/<id>` | Authenticated users; results and changes are limited to owned records, except admins. |
 | **Tenants** | `GET/POST /api/tenants`; `GET/PUT/DELETE /api/tenants/<id>` | Landlords manage their own tenant records; linked tenants may view their own record and update permitted contact fields. |
-| **Units** | `GET/POST /api/properties/<property_id>/units`; `PUT/DELETE /api/units/<id>` | Owning landlord or admin; deletion is blocked when a unit has lease history. |
+| **Units** | `GET/POST /api/units`; `GET/PUT/DELETE /api/units/<id>`; `GET/POST /api/properties/<property_id>/units` | Owning landlord or admin; deletion is blocked when a unit has lease history. |
 | **Applications** | `GET/POST /api/applications`; `GET/PATCH /api/applications/<id>` | Tenants submit and view their own applications; landlords view applications for their units and approve or decline them. Approval links the applicant account to a tenant record and returns lease-form prefill values. |
-| **Leases** | `POST /api/leases`; `DELETE /api/leases/<id>` | Owning landlord or admin; ending a lease is represented as deactivation to preserve history. |
+| **Leases** | `GET/POST /api/leases`; `GET/PUT/DELETE /api/leases/<id>`; tenant views at `/api/leases/mine` and `/api/leases/mine/payments` | Owning landlord or admin; tenants can view only their linked leases and payments; deleting a lease ends it to preserve history. |
 | **Payments** | `GET/POST /payments` | Landlords see/manage payments for their properties; tenants can view payments linked to their lease. |
 
-Collection endpoints for properties, tenants, units, applications, and payments support `page` and `per_page`, defaulting to page 1 and 10 records per page (maximum 100). For example: `GET /api/properties?page=2&per_page=10&q=Oak&city=Nairobi`. Paginated responses include the resource list and metadata (`page`, `per_page`, `total`, `pages`, `has_next`, and `has_prev`). Invalid pagination parameters return HTTP 400. Validation, authorization, missing records, and conflicts return an error message and an appropriate HTTP status.
+Collection endpoints for properties, tenants, units, leases, and payments support `page` and `per_page`, defaulting to page 1 and 10 records per page (maximum 100). For example: `GET /api/properties?page=2&per_page=10&q=Oak&city=Nairobi`. Paginated responses include the resource list and metadata (`page`, `per_page`, `total`, `pages`, `has_next`, and `has_prev`). Invalid pagination parameters return HTTP 400. Validation, authorization, missing records, and conflicts return an error message and an appropriate HTTP status.
+Collection endpoints for properties, tenants, units, applications, leases, and payments support `page` and `per_page`, defaulting to page 1 and 10 records per page (maximum 100). For example: `GET /api/properties?page=2&per_page=10&q=Oak&city=Nairobi`. Paginated responses include the resource list and metadata (`page`, `per_page`, `total`, `pages`, `has_next`, and `has_prev`). Invalid pagination parameters return HTTP 400. Validation, authorization, missing records, and conflicts return an error message and an appropriate HTTP status.
 
 ## Testing and Quality Checks
 
@@ -134,6 +135,6 @@ src/
 
 - Store `.env` files locally only; `.gitignore` excludes them. Use a unique, high-entropy `JWT_SECRET_KEY`.
 - Public registration creates landlord accounts; role changes and admin provisioning must be performed through a trusted administrative process.
-- Tenant and lease relationships are stored, but the interface is focused on property and tenant CRUD rather than full leasing operations.
+- Lease termination preserves records and payment history; it does not represent a legal lease workflow or send tenant notices.
 - Payment records are tracking data only; the app does not connect to a payment provider or move money.
 - No deployment is configured. Use HTTPS, managed secrets, database migrations, and a production WSGI server before hosting publicly.
