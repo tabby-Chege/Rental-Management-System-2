@@ -1,5 +1,7 @@
 import math
+from datetime import date
 
+from sqlalchemy import exists, or_
 from flask import Blueprint, request
 from flask_jwt_extended import get_jwt_identity, jwt_required
 from sqlalchemy.exc import IntegrityError
@@ -12,7 +14,14 @@ from server.pagination import get_pagination, pagination_metadata
 
 units_bp = Blueprint("units_bp", __name__, url_prefix="/api")
 MANAGER_ROLES = {"landlord", "admin"}
-UNIT_FIELDS = {"unit_number", "bedrooms", "bathrooms", "rent_amount"}
+UNIT_FIELDS = {
+    "unit_number",
+    "unit_type",
+    "bedrooms",
+    "bathrooms",
+    "rent_amount",
+    "description",
+}
 
 
 def current_user():
@@ -58,6 +67,22 @@ def validate_unit_data(data, partial=False):
     elif not partial:
         return None, "unit_number is required"
 
+    if "unit_type" in data:
+        value = data["unit_type"]
+        if value is not None and (
+            not isinstance(value, str) or not value.strip() or len(value.strip()) > 50
+        ):
+            return None, "unit_type must be non-empty text of at most 50 characters or null"
+        cleaned["unit_type"] = value.strip() if value else None
+
+    if "description" in data:
+        value = data["description"]
+        if value is not None and (
+            not isinstance(value, str) or len(value) > 5000
+        ):
+            return None, "description must be text of at most 5000 characters or null"
+        cleaned["description"] = value.strip() if value else None
+
     for field in ("bedrooms", "bathrooms", "rent_amount"):
         if field not in data:
             if not partial:
@@ -82,6 +107,16 @@ def validate_unit_data(data, partial=False):
             or value < 0
         ):
             return None, f"{field} must be a non-negative finite number or null"
+        if field == "bathrooms" and value > 99.9:
+            return None, "bathrooms must not exceed 99.9"
+        if field == "bathrooms" and round(value, 1) != value:
+            return None, "bathrooms must have at most one decimal place"
+        if field == "rent_amount" and value <= 0:
+            return None, "rent_amount must be greater than zero or null"
+        if field == "rent_amount" and value > 99999999.99:
+            return None, "rent_amount must not exceed 99999999.99"
+        if field == "rent_amount" and round(value, 2) != value:
+            return None, "rent_amount must have at most two decimal places"
         cleaned[field] = value
 
     return cleaned, None
@@ -119,6 +154,124 @@ def list_units_response(user, property_id=None):
     occupancy = current_leases([unit.id for unit in result.items])
     return {
         "units": [unit.to_dict(occupancy.get(unit.id)) for unit in result.items],
+        "pagination": pagination_metadata(result),
+    }, 200
+
+
+@units_bp.route("/units/public", methods=["GET"])
+def list_public_units():
+    query = Unit.query.join(Property, Unit.property_id == Property.id)
+
+    location = request.args.get("location", "").strip()
+    search = request.args.get("q", "").strip()
+    unit_type = request.args.get("unit_type", "").strip()
+    if len(location) > 120 or len(search) > 120:
+        return {"error": "Search terms must be 120 characters or fewer"}, 400
+    if len(unit_type) > 50:
+        return {"error": "unit_type must be 50 characters or fewer"}, 400
+    for search_term in (location, search):
+        if search_term:
+            pattern = f"%{search_term}%"
+            query = query.filter(
+                or_(
+                    Property.name.ilike(pattern),
+                    Property.address.ilike(pattern),
+                    Property.city.ilike(pattern),
+                    Property.state.ilike(pattern),
+                    Property.zip_code.ilike(pattern),
+                )
+            )
+    if unit_type:
+        query = query.filter(Unit.unit_type.ilike(unit_type))
+
+    try:
+        bedrooms = request.args.get("bedrooms")
+        if bedrooms is not None:
+            bedroom_count = int(bedrooms)
+            if bedroom_count < 0:
+                raise ValueError
+            query = query.filter(Unit.bedrooms == bedroom_count)
+
+        bathrooms = request.args.get("bathrooms")
+        if bathrooms is not None:
+            bathroom_count = float(bathrooms)
+            if not math.isfinite(bathroom_count) or bathroom_count < 0:
+                raise ValueError
+            query = query.filter(Unit.bathrooms == bathroom_count)
+
+        min_rent = request.args.get("min_rent")
+        if min_rent is not None:
+            min_rent_value = float(min_rent)
+            if not math.isfinite(min_rent_value) or min_rent_value < 0:
+                raise ValueError
+            query = query.filter(Unit.rent_amount >= min_rent_value)
+
+        max_rent = request.args.get("max_rent")
+        if max_rent is not None:
+            max_rent_value = float(max_rent)
+            if not math.isfinite(max_rent_value) or max_rent_value < 0:
+                raise ValueError
+            query = query.filter(Unit.rent_amount <= max_rent_value)
+
+        if (
+            min_rent is not None
+            and max_rent is not None
+            and min_rent_value > max_rent_value
+        ):
+            return {"error": "min_rent must not exceed max_rent"}, 400
+    except ValueError:
+        return {
+            "error": "bedrooms, bathrooms, and rent filters must be non-negative numbers"
+        }, 400
+
+    availability = request.args.get("availability", "vacant").strip().lower()
+    if availability not in {"vacant", "occupied", "all"}:
+        return {"error": "availability must be vacant, occupied, or all"}, 400
+
+    occupied_lease = exists().where(
+        Lease.unit_id == Unit.id,
+        Lease.status == "active",
+        Lease.start_date <= date.today(),
+        Lease.end_date >= date.today(),
+    )
+    if availability == "vacant":
+        query = query.filter(~occupied_lease)
+    elif availability == "occupied":
+        query = query.filter(occupied_lease)
+
+    pagination, error = get_pagination()
+    if error:
+        return {"error": error}, 400
+    page, per_page = pagination
+    result = query.add_columns(
+        Property.name,
+        Property.address,
+        Property.city,
+        Property.state,
+        Property.zip_code,
+    ).order_by(Property.name, Unit.unit_number, Unit.id).paginate(
+        page=page, per_page=per_page, error_out=False
+    )
+    occupancy = current_leases([row[0].id for row in result.items])
+    return {
+        "units": [
+            {
+                **unit.to_dict(occupancy.get(unit.id)),
+                "property_name": property_name,
+                "property_address": property_address,
+                "property_city": property_city,
+                "property_state": property_state,
+                "property_zip_code": property_zip_code,
+            }
+            for (
+                unit,
+                property_name,
+                property_address,
+                property_city,
+                property_state,
+                property_zip_code,
+            ) in result.items
+        ],
         "pagination": pagination_metadata(result),
     }, 200
 

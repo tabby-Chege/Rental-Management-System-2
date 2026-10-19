@@ -96,7 +96,8 @@
 }
 
 .manage-field input,
-.manage-field select {
+.manage-field select,
+.manage-field textarea {
   padding: 10px 12px;
   border: 1px solid var(--line);
   border-radius: 8px;

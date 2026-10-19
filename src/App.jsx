@@ -20,6 +20,7 @@ import ManageTenantsPage from "./pages/ManageTenantsPage/ManageTenants";
 import ManageApplicationsPage from "./pages/ManageApplicationsPage/ManageApplicationsPage";
 import TenantDetailsPage from "./pages/TenantDetailsPage/TenantDetailsPage";
 import TenantApplicationsPage from "./pages/TenantApplicationsPage/TenantApplicationsPage";
+import PaymentsPage from "./pages/PaymentsPage/PaymentsPage";
 import { getCurrentUser, getToken, logoutUser } from "./api/authAPI";
 import "./App.css";
 
@@ -99,6 +100,12 @@ function AppShellNav() {
               >
                 Leases
               </NavLink>
+              <NavLink
+                to="/payments"
+                className={({ isActive }) => isActive ? "app-navigation-link is-active" : "app-navigation-link"}
+              >
+                Payment history
+              </NavLink>
             </>
           )}
 
@@ -115,6 +122,12 @@ function AppShellNav() {
                 className={({ isActive }) => isActive ? "app-navigation-link is-active" : "app-navigation-link"}
               >
                 My applications
+              </NavLink>
+              <NavLink
+                to="/payments"
+                className={({ isActive }) => isActive ? "app-navigation-link is-active" : "app-navigation-link"}
+              >
+                Payment history
               </NavLink>
             </>
           )}
@@ -161,6 +174,10 @@ function AppShellNav() {
           <Route element={<ProtectedRoute allowedRoles={["tenant"]} />}>
             <Route path="/tenant/details" element={<TenantDetailsPage />} />
             <Route path="/tenant/applications" element={<TenantApplicationsPage />} />
+          </Route>
+
+          <Route element={<ProtectedRoute allowedRoles={["landlord", "admin", "tenant"]} />}>
+            <Route path="/payments" element={<PaymentsPage />} />
           </Route>
 
           <Route path="/login" element={<Login />} />

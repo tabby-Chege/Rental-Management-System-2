@@ -7,7 +7,7 @@ from server.extensions import db
 from server.models import Property, User
 from server.models_application import APPLICATION_STATUSES, Application
 from server.models_tenant import Tenant
-from server.models_unit_lease import Unit
+from server.models_unit_lease import Unit, current_leases
 from server.pagination import get_pagination, pagination_metadata
 
 applications_bp = Blueprint(
@@ -136,6 +136,8 @@ def create_application():
     unit = Unit.query.filter_by(id=values["unit_id"]).first()
     if not unit:
         return {"error": "Unit not found"}, 404
+    if current_leases([unit.id]):
+        return {"error": "This unit is not available for applications"}, 409
 
     pending = Application.query.filter_by(
         unit_id=unit.id,

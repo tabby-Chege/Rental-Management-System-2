@@ -1,19 +1,22 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import SearchBar from "../../Components/SearchBar/SearchBar";
-import { listPublicProperties } from "../../api/propertiesApi";
+import { listPublicUnits } from "../../api/propertiesApi";
+import { formatBedroomCount, formatUnitType } from "../../utils/unitForm";
 import "./SearchPage.css";
 
 const PER_PAGE = 9;
 
 function SearchPage() {
-  const [properties, setProperties] = useState([]);
+  const [units, setUnits] = useState([]);
   const [query, setQuery] = useState("");
   const [city, setCity] = useState("");
   const [minRent, setMinRent] = useState("");
   const [maxRent, setMaxRent] = useState("");
   const [bedrooms, setBedrooms] = useState("");
-  const [available, setAvailable] = useState("");
+  const [bathrooms, setBathrooms] = useState("");
+  const [unitType, setUnitType] = useState("");
+  const [availability, setAvailability] = useState("vacant");
   const [page, setPage] = useState(1);
   const [pagination, setPagination] = useState(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -27,23 +30,25 @@ function SearchPage() {
       setIsLoading(true);
       setError("");
       try {
-        const result = await listPublicProperties({
+        const result = await listPublicUnits({
           page,
           perPage: PER_PAGE,
           q: query,
-          city,
+          location: city,
           minRent,
           maxRent,
           bedrooms,
-          available,
+          bathrooms,
+          unitType,
+          availability,
         });
         if (!ignore) {
-          setProperties(result.properties);
+          setUnits(result.units);
           setPagination(result.pagination);
         }
       } catch (requestError) {
         if (!ignore) {
-          setProperties([]);
+          setUnits([]);
           setPagination(null);
           setError(requestError.message || "Could not load properties.");
         }
@@ -56,7 +61,7 @@ function SearchPage() {
     return () => {
       ignore = true;
     };
-  }, [page, query, city, minRent, maxRent, bedrooms, available, retryCount]);
+  }, [page, query, city, minRent, maxRent, bedrooms, bathrooms, unitType, availability, retryCount]);
 
   function updateSearch(value) {
     setQuery(value);
@@ -71,8 +76,8 @@ function SearchPage() {
   return (
     <div className="search-page">
       <header className="search-page-header">
-        <h1>Find a rental property</h1>
-        <p>Browse listings from property managers and narrow them by location and unit details.</p>
+        <h1>Find a rental unit</h1>
+        <p>Browse available apartments and homes, then filter by location, layout, and monthly rent.</p>
       </header>
 
       <div className="search-page-searchbar">
@@ -80,13 +85,13 @@ function SearchPage() {
       </div>
 
       <div className="search-location">
-        <label htmlFor="property-city">City</label>
+        <label htmlFor="property-city">Location</label>
         <input
           id="property-city"
           type="search"
           value={city}
           onChange={updateCity}
-          placeholder="All cities"
+          placeholder="City, address, or area"
           maxLength={100}
         />
       </div>
@@ -97,6 +102,7 @@ function SearchPage() {
           <input
             type="number"
             min="0"
+            step="0.01"
             value={minRent}
             onChange={(event) => {
               setMinRent(event.target.value);
@@ -109,6 +115,7 @@ function SearchPage() {
           <input
             type="number"
             min="0"
+            step="0.01"
             value={maxRent}
             onChange={(event) => {
               setMaxRent(event.target.value);
@@ -128,22 +135,57 @@ function SearchPage() {
             <option value="">Any</option>
             {[0, 1, 2, 3, 4, 5].map((count) => (
               <option key={count} value={count}>
-                {count === 0 ? "Studio" : `${count}+`}
+                {count === 0 ? "Studio / bedsitter" : `${count} ${count === 1 ? "bedroom" : "bedrooms"}`}
               </option>
             ))}
           </select>
         </label>
         <label>
-          Availability
+          Bathrooms
           <select
-            value={available}
+            value={bathrooms}
             onChange={(event) => {
-              setAvailable(event.target.value);
+              setBathrooms(event.target.value);
               setPage(1);
             }}
           >
             <option value="">Any</option>
-            <option value="true">Available</option>
+            {["1", "1.5", "2", "2.5", "3", "4"].map((count) => (
+              <option key={count} value={count}>{count}</option>
+            ))}
+          </select>
+        </label>
+        <label>
+          Unit type
+          <select
+            value={unitType}
+            onChange={(event) => {
+              setUnitType(event.target.value);
+              setPage(1);
+            }}
+          >
+            <option value="">Any type</option>
+            <option value="bedsitter">Bedsitter</option>
+            <option value="studio">Studio</option>
+            <option value="one-bedroom">One bedroom</option>
+            <option value="two-bedroom">Two bedrooms</option>
+            <option value="three-bedroom">Three bedrooms</option>
+            <option value="four-bedroom">Four bedrooms</option>
+            <option value="other">Other</option>
+          </select>
+        </label>
+        <label>
+          Availability
+          <select
+            value={availability}
+            onChange={(event) => {
+              setAvailability(event.target.value);
+              setPage(1);
+            }}
+          >
+            <option value="vacant">Available units</option>
+            <option value="all">All units</option>
+            <option value="occupied">Occupied only</option>
           </select>
         </label>
       </div>
@@ -161,40 +203,51 @@ function SearchPage() {
           </div>
         )}
 
-        {isLoading && <p className="status">Loading properties...</p>}
+        {isLoading && <p className="status">Loading rental units...</p>}
 
         {!isLoading && !error && pagination && (
           <div className="results-header">
             <p className="results-count">
-              Showing {properties.length} of {pagination.total} properties
+              Showing {units.length} of {pagination.total} units
             </p>
           </div>
         )}
 
-        {!isLoading && !error && properties.length === 0 && (
+        {!isLoading && !error && units.length === 0 && (
           <div className="empty-state">
-            <h2>No properties found</h2>
-            <p>Try a different city, price range, or bedroom count.</p>
-            <Link to="/register">Create an account</Link>
+            <h2>No matching units found</h2>
+            <p>Try changing the location, unit type, bedroom count, or rent range.</p>
           </div>
         )}
 
-        {!isLoading && !error && properties.length > 0 && (
+        {!isLoading && !error && units.length > 0 && (
           <div className="property-grid">
-            {properties.map((property) => (
+            {units.map((unit) => (
               <Link
-                to={`/properties/${property.id}`}
-                key={property.id}
+                to={`/properties/${unit.property_id}#unit-${unit.id}`}
+                key={unit.id}
                 className="property-card"
               >
                 <div className="property-card-top">
-                  <h2>{property.name}</h2>
+                  <h2>{unit.property_name} · Unit {unit.unit_number}</h2>
                 </div>
                 <p className="property-card-address">
-                  {property.address}, {property.city}, {property.state}
-                  {property.zip_code ? ` ${property.zip_code}` : ""}
+                  {unit.property_address}, {unit.property_city}, {unit.property_state}
+                  {unit.property_zip_code ? ` ${unit.property_zip_code}` : ""}
                 </p>
-                {property.description && <p>{property.description}</p>}
+                <p className="property-card-layouts">
+                  {formatUnitType(unit.unit_type, unit.bedrooms)} · {formatBedroomCount(unit.bedrooms)}
+                  {unit.bathrooms != null ? ` · ${unit.bathrooms} bathrooms` : ""}
+                </p>
+                <p>
+                  {unit.rent_amount != null
+                    ? `KES ${Number(unit.rent_amount).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} per month`
+                    : "Rent not specified"}
+                </p>
+                <span className={`unit-availability is-${unit.availability_status}`}>
+                  {unit.availability_status === "occupied" ? "Occupied" : "Available"}
+                </span>
+                {unit.description && <p>{unit.description}</p>}
               </Link>
             ))}
           </div>

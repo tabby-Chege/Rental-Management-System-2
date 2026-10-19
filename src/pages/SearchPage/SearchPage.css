@@ -299,6 +299,33 @@
   font-size: 17px;
 }
 
+.property-card-top h2 {
+  margin: 0;
+  font-size: 17px;
+}
+
+.property-card-layouts {
+  color: #374151;
+}
+
+.unit-availability {
+  display: inline-block;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.unit-availability.is-vacant {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.unit-availability.is-occupied {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
 .property-card-badges {
   display: flex;
   gap: 6px;

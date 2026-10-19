@@ -221,8 +221,37 @@ def list_public_properties():
     result = query.order_by(Property.created_at.desc(), Property.id.desc()).paginate(
         page=page, per_page=per_page, error_out=False
     )
+    properties = result.items
+    bedroom_counts = {prop.id: set() for prop in properties}
+    if bedroom_counts:
+        available_bedrooms = (
+            db.session.query(Unit.property_id, Unit.bedrooms)
+            .filter(
+                Unit.property_id.in_(bedroom_counts),
+                ~exists().where(
+                    Lease.unit_id == Unit.id,
+                    Lease.status == "active",
+                    Lease.start_date <= date.today(),
+                    Lease.end_date >= date.today(),
+                ),
+            )
+            .distinct()
+            .all()
+        )
+        for property_id, bedrooms in available_bedrooms:
+            bedroom_counts[property_id].add(bedrooms)
+
     return {
-        "properties": [prop.to_dict() for prop in result.items],
+        "properties": [
+            {
+                **prop.to_dict(),
+                "available_bedroom_counts": (
+                    sorted(count for count in bedroom_counts[prop.id] if count is not None)
+                    + ([None] if None in bedroom_counts[prop.id] else [])
+                ),
+            }
+            for prop in properties
+        ],
         "pagination": pagination_metadata(result),
     }, 200
 
@@ -241,14 +270,20 @@ def list_public_property_units(property_id):
     if not prop:
         return {"error": "Property not found"}, 404
 
+    raw_unit_id = request.args.get("unit_id")
+    if raw_unit_id is not None:
+        if not raw_unit_id.isdecimal() or int(raw_unit_id) < 1:
+            return {"error": "unit_id must be a positive integer"}, 400
+
     pagination, error = get_pagination()
     if error:
         return {"error": error}, 400
     page, per_page = pagination
-    result = (
-        Unit.query.filter_by(property_id=property_id)
-        .order_by(Unit.unit_number, Unit.id)
-        .paginate(page=page, per_page=per_page, error_out=False)
+    units_query = Unit.query.filter_by(property_id=property_id)
+    if raw_unit_id is not None:
+        units_query = units_query.filter(Unit.id == int(raw_unit_id))
+    result = units_query.order_by(Unit.unit_number, Unit.id).paginate(
+        page=page, per_page=per_page, error_out=False
     )
     leases = current_leases([unit.id for unit in result.items])
     return {

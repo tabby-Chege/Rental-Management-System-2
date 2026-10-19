@@ -1,3 +1,8 @@
+from datetime import date, timedelta
+
+from server.extensions import db
+from server.models_tenant import Tenant
+from server.models_unit_lease import Lease
 from tests.test_tenants import client, world  # noqa: F401 (shared fixtures)
 
 
@@ -65,7 +70,8 @@ def test_landlord_application_list_is_scoped_to_owned_units(client, world):
     other_unit = create_unit(client, world["other"], "Not owned")
     owned_app = apply(client, world["tenant"], owned_unit)
     other_app = apply(client, world["tenant2"], other_unit)
-    assert owned_app.status_code == other_app.status_code == 201
+    assert owned_app.status_code == 201, owned_app.get_json()
+    assert other_app.status_code == 201, other_app.get_json()
 
     listed = client.get("/api/applications", headers=world["landlord"])
     assert listed.status_code == 200
@@ -98,6 +104,39 @@ def test_application_validation_and_duplicate_pending_application(client, world)
     assert apply(client, world["tenant"], unit_id).status_code == 201
     duplicate = apply(client, world["tenant"], unit_id)
     assert duplicate.status_code == 409
+
+
+def test_tenant_cannot_apply_to_a_unit_with_an_active_lease(client, world):
+    unit_id = create_unit(client, world["landlord"])
+    tenant = Tenant(
+        landlord_id=world["ids"]["landlord"],
+        user_id=world["ids"]["tenant_user"],
+        name="Tom",
+        email="tom@x.com",
+    )
+    db.session.add(tenant)
+    db.session.flush()
+    db.session.add(
+        Lease(
+            unit_id=unit_id,
+            tenant_id=tenant.id,
+            start_date=date.today() - timedelta(days=1),
+            end_date=date.today() + timedelta(days=30),
+            monthly_rent=1200,
+            deposit=0,
+            status="active",
+        )
+    )
+    db.session.commit()
+
+    available = client.get("/api/units/public?availability=vacant")
+    occupied = client.get("/api/units/public?availability=occupied")
+    assert available.get_json()["pagination"]["total"] == 0
+    assert occupied.get_json()["pagination"]["total"] == 1
+
+    response = apply(client, world["tenant"], unit_id)
+    assert response.status_code == 409
+    assert "not available" in response.get_json()["error"]
 
 
 def test_landlord_approval_creates_tenant_and_returns_lease_prefill(client, world):

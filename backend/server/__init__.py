@@ -1,4 +1,4 @@
-from flask import Flask
+from flask import Flask, jsonify
 from flask_cors import CORS
 
 from server.routes.tenants import tenants_bp
@@ -25,6 +25,11 @@ def create_app():
     db.init_app(app)
     bcrypt.init_app(app)
     jwt.init_app(app)
+
+    @jwt.expired_token_loader
+    def expired_token_callback(jwt_header, jwt_payload):
+        message = "Your session has ended. Please sign in again to continue."
+        return jsonify({"error": message, "msg": message}), 401
 
     app.register_blueprint(auth_bp)
     app.register_blueprint(payments_bp)

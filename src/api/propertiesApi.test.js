@@ -6,6 +6,7 @@ import {
   deleteProperty,
   getProperty,
   getPublicProperty,
+  listPublicUnits,
   listProperties,
   listPublicProperties,
   listPublicPropertyUnits,
@@ -71,15 +72,49 @@ test("public search and property detail use the public listing endpoints", async
     available: "true",
   });
   assert.deepEqual(await getPublicProperty(7), { id: 7 });
-  assert.deepEqual(await listPublicPropertyUnits(7), { units: [{ id: 11 }] });
+  assert.deepEqual(await listPublicPropertyUnits(7, { unitId: 11 }), { units: [{ id: 11 }] });
   assert.equal(
     calls[0],
     "/api/properties/public?page=1&per_page=10&city=Nairobi&min_rent=500&bedrooms=2&available=true"
   );
   assert.deepEqual(calls.slice(1), [
     "/api/properties/public/7",
-    "/api/properties/public/7/units",
+    "/api/properties/public/7/units?unit_id=11",
   ]);
+
+  delete globalThis.localStorage;
+  delete globalThis.fetch;
+});
+
+test("public unit search sends unit-level filters and defaults to vacant inventory", async () => {
+  mockBrowser();
+  let requestedUrl;
+  globalThis.fetch = async (url) => {
+    requestedUrl = url;
+    return mockResponse({ units: [], pagination: { total: 0 } });
+  };
+
+  const result = await listPublicUnits({
+    q: "riverside",
+    location: "Nairobi",
+    bedrooms: 2,
+    bathrooms: 1.5,
+    minRent: 10000,
+    maxRent: 20000,
+    unitType: "two-bedroom",
+  });
+
+  const params = new URL(requestedUrl, "http://localhost").searchParams;
+  assert.equal(new URL(requestedUrl, "http://localhost").pathname, "/api/units/public");
+  assert.equal(params.get("availability"), "vacant");
+  assert.equal(params.get("q"), "riverside");
+  assert.equal(params.get("location"), "Nairobi");
+  assert.equal(params.get("bedrooms"), "2");
+  assert.equal(params.get("bathrooms"), "1.5");
+  assert.equal(params.get("min_rent"), "10000");
+  assert.equal(params.get("max_rent"), "20000");
+  assert.equal(params.get("unit_type"), "two-bedroom");
+  assert.deepEqual(result.units, []);
 
   delete globalThis.localStorage;
   delete globalThis.fetch;
@@ -114,6 +149,14 @@ test("property API exposes CRUD operations and surfaces API errors", async () =>
   await assert.rejects(listProperties(), {
     message: "Not allowed",
     status: 403,
+  });
+
+  globalThis.fetch = async () => mockResponse({
+    error: "Your session has ended. Please sign in again to continue.",
+  }, 401);
+  await assert.rejects(createProperty({ name: "Home" }), {
+    message: "Your session has ended. Please sign in again to continue.",
+    status: 401,
   });
 
   delete globalThis.localStorage;

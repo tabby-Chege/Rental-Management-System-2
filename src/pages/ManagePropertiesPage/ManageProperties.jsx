@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 import { getToken } from "../../api/authAPI";
 import {
   createProperty,
@@ -6,6 +7,8 @@ import {
   listProperties,
   updateProperty,
 } from "../../api/propertiesApi";
+import { createUnit } from "../../api/unitsAPI";
+import { validateUnitForm } from "../../utils/unitForm";
 import "./ManageProperties.css";
 
 const EMPTY_FORM = {
@@ -14,6 +17,14 @@ const EMPTY_FORM = {
   city: "",
   state: "",
   zip_code: "",
+  description: "",
+};
+const EMPTY_UNIT_FORM = {
+  unit_number: "",
+  unit_type: "",
+  bedrooms: "",
+  bathrooms: "",
+  rent_amount: "",
   description: "",
 };
 
@@ -39,9 +50,11 @@ function ManagePropertiesPage() {
   const [reloadCount, setReloadCount] = useState(0);
 
   const [form, setForm] = useState(EMPTY_FORM);
+  const [unitForm, setUnitForm] = useState(EMPTY_UNIT_FORM);
   const [editingId, setEditingId] = useState(null);
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState(null);
+  const [pendingUnitPropertyId, setPendingUnitPropertyId] = useState(null);
 
   useEffect(() => {
     if (!loggedIn) return undefined;
@@ -72,47 +85,108 @@ function ManagePropertiesPage() {
     const { name, value } = event.target;
     setForm((current) => ({ ...current, [name]: value }));
   }
+  function handleUnitChange(event) {
+  const { name, value } = event.target;
+  setUnitForm((current) => ({ ...current, [name]: value }));
+}
 
-  function resetForm() {
-    setForm(EMPTY_FORM);
-    setEditingId(null);
-    setFormError(null);
-  }
+function resetForm() {
+  setForm(EMPTY_FORM);
+  setUnitForm(EMPTY_UNIT_FORM);
+  setEditingId(null);
+  setPendingUnitPropertyId(null);
+  setFormError(null);
+}
 
-  function handleEdit(property) {
-    setEditingId(property.id);
-    setForm(toFormValues(property));
-    setFormError(null);
-    window.scrollTo({ top: 0, behavior: "smooth" });
-  }
+function handleEdit(property) {
+  setEditingId(property.id);
+  setForm(toFormValues(property));
+  setUnitForm(EMPTY_UNIT_FORM);
+  setPendingUnitPropertyId(null);
+  setFormError(null);
+  window.scrollTo({ top: 0, behavior: "smooth" });
+}
 
   async function handleSubmit(event) {
-    event.preventDefault();
+  event.preventDefault();
+  setFormError(null);
+
+  // Editing an existing property does not create a unit.
+  if (editingId) {
     setSaving(true);
-    setFormError(null);
 
     try {
-      if (editingId) {
-        const updated = await updateProperty(editingId, form);
-        setProperties((current) =>
-          current.map((p) => (p.id === updated.id ? updated : p))
-        );
-      } else {
-        const created = await createProperty(form);
-        if (page !== 1) {
-          setPage(1);
-        } else {
-          setProperties((current) => [created, ...current].slice(0, 10));
-          setReloadCount((count) => count + 1);
-        }
-      }
+      const updated = await updateProperty(editingId, form);
+
+      setProperties((current) =>
+        current.map((property) =>
+          property.id === updated.id ? updated : property
+        )
+      );
+
       resetForm();
     } catch (err) {
       setFormError(err.message);
     } finally {
       setSaving(false);
     }
+
+    return;
   }
+
+  // Validate the first unit before creating a property.
+  const unitErrors = validateUnitForm(unitForm, {
+    requireProperty: false,
+    requireDetails: true,
+  });
+
+  if (Object.keys(unitErrors).length > 0) {
+    setFormError(Object.values(unitErrors)[0]);
+    return;
+  }
+
+  setSaving(true);
+
+  try {
+    let propertyId = pendingUnitPropertyId;
+
+    // Create the property only if it has not already been saved.
+    if (!propertyId) {
+      const created = await createProperty(form);
+
+      propertyId = created.id;
+      setPendingUnitPropertyId(propertyId);
+
+      if (page === 1) {
+        setProperties((current) =>
+          [created, ...current.filter((p) => p.id !== created.id)].slice(0, 10)
+        );
+      } else {
+        setPage(1);
+      }
+
+      setReloadCount((count) => count + 1);
+    }
+
+    // Create the first unit using the saved property's ID.
+    await createUnit({
+      property_id: Number(propertyId),
+      unit_number: unitForm.unit_number.trim(),
+      unit_type: unitForm.unit_type,
+      bedrooms: Number(unitForm.bedrooms),
+      bathrooms: Number(unitForm.bathrooms),
+      rent_amount: Number(unitForm.rent_amount),
+      description: unitForm.description.trim() || null,
+    });
+
+    // Clear the form only after both operations succeed.
+    resetForm();
+  } catch (err) {
+    setFormError(err.message);
+  } finally {
+    setSaving(false);
+  }
+}
 
   async function handleDelete(property) {
     const confirmed = window.confirm(
@@ -221,6 +295,97 @@ function ManagePropertiesPage() {
             rows={3}
           />
         </label>
+        {!editingId && (
+  <div className="property-unit-section">
+    <h3>First unit details</h3>
+    <p>Enter the details of the first unit in this property.</p>
+
+    <label>
+      Unit number *
+      <input
+        name="unit_number"
+        value={unitForm.unit_number}
+        onChange={handleUnitChange}
+        maxLength={50}
+        required
+      />
+    </label>
+
+    <label>
+      Unit type *
+      <select
+        name="unit_type"
+        value={unitForm.unit_type}
+        onChange={handleUnitChange}
+        required
+      >
+        <option value="">Choose unit type</option>
+        <option value="bedsitter">Bedsitter</option>
+        <option value="studio">Studio</option>
+        <option value="one-bedroom">One bedroom</option>
+        <option value="two-bedroom">Two bedrooms</option>
+        <option value="three-bedroom">Three bedrooms</option>
+        <option value="four-bedroom">Four bedrooms</option>
+        <option value="other">Other</option>
+      </select>
+    </label>
+
+    <div className="manage-form-row">
+      <label>
+        Bedrooms *
+        <input
+          type="number"
+          name="bedrooms"
+          value={unitForm.bedrooms}
+          onChange={handleUnitChange}
+          min="0"
+          step="1"
+          required
+        />
+        <small>Enter 0 for a studio or bedsitter.</small>
+      </label>
+
+      <label>
+        Bathrooms *
+        <input
+          type="number"
+          name="bathrooms"
+          value={unitForm.bathrooms}
+          onChange={handleUnitChange}
+          min="0"
+          max="99.9"
+          step="0.1"
+          required
+        />
+      </label>
+
+      <label>
+        Monthly rent (KES) *
+        <input
+          type="number"
+          name="rent_amount"
+          value={unitForm.rent_amount}
+          onChange={handleUnitChange}
+          min="0.01"
+          max="99999999.99"
+          step="0.01"
+          required
+        />
+      </label>
+    </div>
+
+    <label>
+      Unit description
+      <textarea
+        name="description"
+        value={unitForm.description}
+        onChange={handleUnitChange}
+        maxLength={5000}
+        rows={3}
+      />
+    </label>
+  </div>
+)}
 
         {formError && (
           <p className="manage-error" role="alert">
@@ -306,6 +471,12 @@ function ManagePropertiesPage() {
                 >
                   Edit
                 </button>
+                <Link
+                  className="manage-button manage-button--ghost"
+                  to={`/units?property_id=${property.id}`}
+                >
+                  Manage units
+                </Link>
                 <button
                   type="button"
                   className="manage-button manage-button--danger"

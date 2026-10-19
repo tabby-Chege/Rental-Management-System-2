@@ -1,19 +1,39 @@
 import { useEffect, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { createUnit, deleteUnit, listProperties, listUnits, updateUnit } from "../../api/unitsAPI";
-import { validateUnitForm } from "../../utils/unitForm";
+import { formatBedroomCount, formatUnitType, validateUnitForm } from "../../utils/unitForm";
 import "../manage.css";
 
-const EMPTY_FORM = { property_id: "", unit_number: "", bedrooms: "", bathrooms: "", rent_amount: "" };
-const CREATE_FIELDS = ["property_id", "unit_number", "bedrooms", "bathrooms", "rent_amount"];
+const EMPTY_FORM = {
+  property_id: "",
+  unit_number: "",
+  unit_type: "",
+  bedrooms: "",
+  bathrooms: "",
+  rent_amount: "",
+  description: "",
+  availability_status: "vacant",
+};
+const CREATE_FIELDS = [
+  "property_id",
+  "unit_number",
+  "unit_type",
+  "bedrooms",
+  "bathrooms",
+  "rent_amount",
+  "description",
+];
 // A unit cannot move to another property, so property_id is create-only.
-const EDIT_FIELDS = ["unit_number", "bedrooms", "bathrooms", "rent_amount"];
+const EDIT_FIELDS = ["unit_number", "unit_type", "bedrooms", "bathrooms", "rent_amount", "description"];
 
 const FIELD_CONFIG = {
   property_id: { label: "Property" },
   unit_number: { label: "Unit number", type: "text" },
-  bedrooms: { label: "Bedrooms (optional)", type: "number", min: "0" },
-  bathrooms: { label: "Bathrooms (optional)", type: "number", min: "0", step: "0.5" },
-  rent_amount: { label: "Listed rent (optional)", type: "number", min: "0", step: "0.01" },
+  unit_type: { label: "Unit type", type: "select" },
+  bedrooms: { label: "Bedrooms (0 for studio/bedsitter)", type: "number", min: "0", step: "1" },
+  bathrooms: { label: "Bathrooms", type: "number", min: "0", max: "99.9", step: "0.5" },
+  rent_amount: { label: "Monthly rent (KES)", type: "number", min: "0.01", max: "99999999.99", step: "0.01" },
+  description: { label: "Unit description (optional)", type: "textarea" },
 };
 
 const money = (value) =>
@@ -23,9 +43,12 @@ function unitToForm(unit) {
   return {
     ...EMPTY_FORM,
     unit_number: unit.unit_number,
+    unit_type: unit.unit_type ?? "",
     bedrooms: unit.bedrooms ?? "",
     bathrooms: unit.bathrooms ?? "",
     rent_amount: unit.rent_amount ?? "",
+    description: unit.description ?? "",
+    availability_status: unit.availability_status ?? (unit.is_occupied ? "occupied" : "vacant"),
   };
 }
 
@@ -34,7 +57,9 @@ function toBody(form, fields) {
   const body = {};
   fields.forEach((name) => {
     const value = String(form[name] ?? "").trim();
-    if (name === "unit_number") body[name] = value;
+    if (name === "unit_number" || name === "unit_type" || name === "description") {
+      body[name] = value || null;
+    }
     else if (name === "property_id") body[name] = Number(value);
     else body[name] = value === "" ? null : Number(value);
   });
@@ -43,25 +68,40 @@ function toBody(form, fields) {
 
 function unitDetails(unit) {
   const parts = [];
-  if (unit.bedrooms != null) parts.push(`${unit.bedrooms} bed`);
+  parts.push(formatUnitType(unit.unit_type, unit.bedrooms));
+  parts.push(formatBedroomCount(unit.bedrooms));
   if (unit.bathrooms != null) parts.push(`${unit.bathrooms} bath`);
-  if (unit.rent_amount != null) parts.push(`listed rent ${money(unit.rent_amount)}`);
+  if (unit.rent_amount != null) parts.push(`KES ${money(unit.rent_amount)} per month`);
   return parts.length > 0 ? parts.join(", ") : "No extra details added";
 }
 
-function UnitForm({ initial, fields, properties = [], submitLabel, resetOnSave, onSubmit, onCancel }) {
+function UnitForm({
+  initial,
+  fields,
+  properties = [],
+  submitLabel,
+  resetOnSave,
+  onSubmit,
+  onCancel,
+  onPropertyChange,
+}) {
   const [form, setForm] = useState(initial);
   const [errors, setErrors] = useState({});
   const [submitError, setSubmitError] = useState("");
   const [isSaving, setIsSaving] = useState(false);
 
   function handleChange(event) {
-    setForm((current) => ({ ...current, [event.target.name]: event.target.value }));
+    const { name, value } = event.target;
+    setForm((current) => ({ ...current, [name]: value }));
+    if (name === "property_id") onPropertyChange?.(value);
   }
 
   async function handleSubmit(event) {
     event.preventDefault();
-    const found = validateUnitForm(form, { requireProperty: fields.includes("property_id") });
+    const found = validateUnitForm(form, {
+      requireProperty: fields.includes("property_id"),
+      requireDetails: true,
+    });
     setErrors(found);
     if (Object.keys(found).length > 0) return;
 
@@ -69,7 +109,9 @@ function UnitForm({ initial, fields, properties = [], submitLabel, resetOnSave, 
     setSubmitError("");
     try {
       await onSubmit(toBody(form, fields));
-      if (resetOnSave) setForm(EMPTY_FORM);
+      if (resetOnSave) {
+        setForm({ ...EMPTY_FORM, property_id: form.property_id });
+      }
     } catch (err) {
       setSubmitError(err.message);
     } finally {
@@ -98,6 +140,31 @@ function UnitForm({ initial, fields, properties = [], submitLabel, resetOnSave, 
                   </option>
                 ))}
               </select>
+            ) : config.type === "select" ? (
+              <select
+                name={name}
+                value={form[name]}
+                onChange={handleChange}
+                aria-invalid={Boolean(errors[name])}
+              >
+                <option value="">Choose a unit type</option>
+                <option value="bedsitter">Bedsitter</option>
+                <option value="studio">Studio</option>
+                <option value="one-bedroom">One bedroom</option>
+                <option value="two-bedroom">Two bedrooms</option>
+                <option value="three-bedroom">Three bedrooms</option>
+                <option value="four-bedroom">Four bedrooms</option>
+                <option value="other">Other</option>
+              </select>
+            ) : config.type === "textarea" ? (
+              <textarea
+                name={name}
+                value={form[name]}
+                onChange={handleChange}
+                maxLength={5000}
+                rows={3}
+                aria-invalid={Boolean(errors[name])}
+              />
             ) : (
               <input
                 name={name}
@@ -113,6 +180,11 @@ function UnitForm({ initial, fields, properties = [], submitLabel, resetOnSave, 
           </label>
         );
       })}
+      <div className="manage-field">
+        <span>Availability</span>
+        <strong>{initial.availability_status === "occupied" ? "Occupied" : "Vacant"}</strong>
+        <small>Availability is based on active lease dates and cannot be set independently.</small>
+      </div>
       {submitError && (
         <p className="manage-error" role="alert">
           {submitError}
@@ -133,6 +205,8 @@ function UnitForm({ initial, fields, properties = [], submitLabel, resetOnSave, 
 }
 
 function UnitsPage() {
+  const [searchParams, setSearchParams] = useSearchParams();
+  const selectedPropertyId = searchParams.get("property_id") || "";
   const [units, setUnits] = useState([]);
   const [properties, setProperties] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -142,8 +216,13 @@ function UnitsPage() {
   useEffect(() => {
     let ignore = false;
     async function load() {
+      setIsLoading(true);
+      setError("");
       try {
-        const [unitList, propertyList] = await Promise.all([listUnits(), listProperties()]);
+        const [unitList, propertyList] = await Promise.all([
+          listUnits(selectedPropertyId || undefined),
+          listProperties(),
+        ]);
         if (!ignore) {
           setUnits(unitList);
           setProperties(propertyList);
@@ -158,7 +237,7 @@ function UnitsPage() {
     return () => {
       ignore = true;
     };
-  }, []);
+  }, [selectedPropertyId]);
 
   const propertyName = (id) => properties.find((p) => p.id === id)?.name ?? `Property #${id}`;
 
@@ -194,15 +273,32 @@ function UnitsPage() {
           <p className="manage-status">Add a property first, then come back to add its units.</p>
         ) : (
           <UnitForm
-            initial={EMPTY_FORM}
+            initial={{
+              ...EMPTY_FORM,
+              property_id: selectedPropertyId,
+            }}
             fields={CREATE_FIELDS}
             properties={properties}
+            onPropertyChange={(propertyId) => {
+              if (propertyId) setSearchParams({ property_id: propertyId });
+              else setSearchParams({});
+            }}
             submitLabel="Add unit"
             resetOnSave
             onSubmit={handleCreate}
           />
         )}
       </div>
+
+      {selectedPropertyId && properties.some((property) => String(property.id) === selectedPropertyId) && (
+        <button
+          type="button"
+          className="manage-button is-secondary"
+          onClick={() => setSearchParams({})}
+        >
+          Show units for all properties
+        </button>
+      )}
 
       {error && (
         <p className="manage-error" role="alert">
@@ -211,7 +307,9 @@ function UnitsPage() {
       )}
       {isLoading && <p className="manage-status">Loading units…</p>}
       {!isLoading && units.length === 0 && !error && (
-        <p className="manage-status">No units yet. Add your first one above.</p>
+        <p className="manage-status">
+          {selectedPropertyId ? "This property has no units yet. Add its first unit above." : "No units yet. Add your first one above."}
+        </p>
       )}
 
       <ul className="manage-list">

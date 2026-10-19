@@ -28,9 +28,11 @@ class Unit(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     property_id = db.Column(db.Integer, db.ForeignKey("properties.id"), nullable=False, index=True)
     unit_number = db.Column(db.String(50), nullable=False)
+    unit_type = db.Column(db.String(50))
     bedrooms = db.Column(db.Integer)
     bathrooms = db.Column(db.Numeric(3, 1))
     rent_amount = db.Column(db.Numeric(10, 2))
+    description = db.Column(db.Text)
     created_at = db.Column(db.DateTime(timezone=True), default=_now, nullable=False)
 
     def to_dict(self, current_lease=None):
@@ -38,11 +40,14 @@ class Unit(db.Model):
             "id": self.id,
             "property_id": self.property_id,
             "unit_number": self.unit_number,
+            "unit_type": self.unit_type,
             "bedrooms": self.bedrooms,
             "bathrooms": _number(self.bathrooms),
             "rent_amount": _number(self.rent_amount),
             "is_occupied": current_lease is not None,
+            "availability_status": "occupied" if current_lease else "vacant",
             "current_lease_id": current_lease.id if current_lease else None,
+            "description": self.description,
             "created_at": self.created_at.isoformat(),
         }
 

@@ -57,6 +57,7 @@ def payment_query_for_user(user):
 
 
 @payments_bp.route("/payments", methods=["GET"])
+@payments_bp.route("/api/payments", methods=["GET"])
 @jwt_required()
 def get_payments():
     user = current_user()
@@ -73,16 +74,45 @@ def get_payments():
     page, per_page = pagination
     result = (
         payment_query_for_user(user)
+        .join(Tenant, Lease.tenant_id == Tenant.id)
+        .add_columns(
+            Tenant.name,
+            Property.name,
+            Unit.unit_number,
+            Lease.tenant_id,
+            Lease.unit_id,
+            Property.id,
+        )
         .order_by(Payment.payment_date.desc(), Payment.id.desc())
         .paginate(page=page, per_page=per_page, error_out=False)
     )
 
     return jsonify({
-        "payments": [payment.to_dict() for payment in result.items],
+        "payments": [
+            {
+                **payment.to_dict(),
+                "tenant_id": tenant_id,
+                "tenant_name": tenant_name,
+                "property_id": property_id,
+                "property_name": property_name,
+                "unit_id": unit_id,
+                "unit_number": unit_number,
+            }
+            for (
+                payment,
+                tenant_name,
+                property_name,
+                unit_number,
+                tenant_id,
+                unit_id,
+                property_id,
+            ) in result.items
+        ],
         "pagination": pagination_metadata(result),
     }), 200
 
 
+@payments_bp.route("/api/payments", methods=["POST"])
 @payments_bp.route("/payments", methods=["POST"])
 @jwt_required()
 def create_payment():
@@ -103,7 +133,7 @@ def create_payment():
     lease_id = data.get("lease_id")
     amount = data.get("amount")
     payment_method = data.get("payment_method")
-    status = data.get("status", "Completed")
+    status = data.get("status", "Pending")
     reference_code = data.get("reference_code")
 
     if isinstance(lease_id, bool) or not isinstance(lease_id, int) or lease_id <= 0:

@@ -72,6 +72,7 @@ def add_payment(lease_id, reference_code):
 
 def test_payments_require_authentication(client):
     assert client.get("/payments").status_code == 401
+    assert client.get("/api/payments").status_code == 401
 
     response = client.post(
         "/payments",
@@ -114,6 +115,22 @@ def test_landlord_can_record_payment_for_own_lease(client, world):
     assert response.status_code == 201
     assert response.get_json()["lease_id"] == lease_id
 
+def test_payment_defaults_to_pending_status(client, world):
+    lease_id = make_lease(client, world)
+
+    response = client.post(
+        "/api/payments",
+        headers=world["landlord"],
+        json={
+            "lease_id": lease_id,
+            "amount": 1000,
+            "payment_method": "M-Pesa",
+            "reference_code": "PENDING-DEFAULT-001",
+        },
+    )
+
+    assert response.status_code == 201
+    assert response.get_json()["status"] == "Pending"
 
 def test_landlord_cannot_record_payment_for_another_landlord_lease(
     client, world
@@ -151,12 +168,21 @@ def test_landlord_sees_only_payments_for_own_properties(client, world):
     own_payment_id = add_payment(own_lease, "LANDLORD-OWN-001")
     add_payment(other_lease, "LANDLORD-OTHER-001")
 
-    response = client.get("/payments", headers=world["landlord"])
+    response = client.get("/api/payments", headers=world["landlord"])
 
     assert response.status_code == 200
-    payment_ids = {payment["id"] for payment in response.get_json()["payments"]}
+    payments = response.get_json()["payments"]
+    payment_ids = {payment["id"] for payment in payments}
     assert own_payment_id in payment_ids
     assert len(payment_ids) == 1
+    payment = payments[0]
+    assert payment["tenant_name"] == "Test tenant_user"
+    assert payment["property_name"] == "Property landlord"
+    assert payment["unit_number"] == "UNIT-landlord"
+    assert payment["payment_method"] == "M-Pesa"
+    assert payment["reference_code"] == "LANDLORD-OWN-001"
+    assert "password_hash" not in payment
+    assert "access_token" not in payment
 
 
 def test_tenant_sees_only_payments_for_own_leases(client, world):
@@ -177,6 +203,14 @@ def test_tenant_sees_only_payments_for_own_leases(client, world):
     payment_ids = {payment["id"] for payment in response.get_json()["payments"]}
     assert own_payment_id in payment_ids
     assert len(payment_ids) == 1
+    assert response.get_json()["payments"][0]["tenant_name"] == "Test tenant_user"
+
+
+def test_payment_history_returns_empty_for_users_without_payments(client, world):
+    response = client.get("/api/payments", headers=world["tenant"])
+    assert response.status_code == 200
+    assert response.get_json()["payments"] == []
+    assert response.get_json()["pagination"]["total"] == 0
 
 
 def test_payment_validation_rejects_invalid_amount(client, world):

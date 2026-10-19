@@ -1,15 +1,20 @@
 import { useEffect, useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useLocation, useParams } from "react-router-dom";
 import {
   getPublicProperty,
   listPublicPropertyUnits,
 } from "../../api/propertiesApi";
 import { createApplication } from "../../api/applicationsApi";
 import { getCurrentUser, getToken } from "../../api/authAPI";
+import { formatBedroomCount, formatUnitType } from "../../utils/unitForm";
 import "./PropertyDetail.css";
 
 function PropertyDetailsPage() {
   const { id } = useParams();
+  const location = useLocation();
+  const selectedUnitId = location.hash.startsWith("#unit-")
+    ? location.hash.slice("#unit-".length)
+    : "";
   const [property, setProperty] = useState(null);
   const [units, setUnits] = useState([]);
   const [user, setUser] = useState(null);
@@ -31,7 +36,7 @@ function PropertyDetailsPage() {
       try {
         const [result, unitResult] = await Promise.all([
           getPublicProperty(id),
-          listPublicPropertyUnits(id),
+          listPublicPropertyUnits(id, { unitId: selectedUnitId }),
         ]);
         if (!ignore) {
           setProperty(result);
@@ -63,7 +68,13 @@ function PropertyDetailsPage() {
     return () => {
       ignore = true;
     };
-  }, [id, retryCount]);
+  }, [id, retryCount, selectedUnitId]);
+
+  useEffect(() => {
+    if (!isLoading && location.hash.startsWith("#unit-")) {
+      document.getElementById(location.hash.slice(1))?.scrollIntoView({ block: "center" });
+    }
+  }, [isLoading, location.hash, units]);
 
   async function applyForUnit(unit) {
     setApplicationError("");
@@ -132,23 +143,26 @@ function PropertyDetailsPage() {
         </section>
       )}
       <section className="details-box details-units">
-        <h2>Available units</h2>
+        <h2>Units at this property</h2>
         {units.length === 0 && <p>No units are listed for this property yet.</p>}
         <ul>
           {units.map((unit) => (
-            <li key={unit.id} className="details-unit">
+            <li key={unit.id} id={`unit-${unit.id}`} className="details-unit">
               <div>
                 <strong>Unit {unit.unit_number}</strong>
                 <p>
-                  {unit.bedrooms === 0 ? "Studio" : `${unit.bedrooms ?? "—"} bedrooms`}
+                  {formatUnitType(unit.unit_type, unit.bedrooms)}
+                  {" · "}
+                  {formatBedroomCount(unit.bedrooms)}
                   {unit.bathrooms != null ? ` · ${unit.bathrooms} bathrooms` : ""}
                   {unit.rent_amount != null
-                    ? ` · ${Number(unit.rent_amount).toLocaleString()} per month`
+                    ? ` · KES ${Number(unit.rent_amount).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} per month`
                     : ""}
                 </p>
-                <span className={`manage-badge is-${unit.is_occupied ? "occupied" : "vacant"}`}>
+                <span className={`manage-badge is-${unit.availability_status || (unit.is_occupied ? "occupied" : "vacant")}`}>
                   {unit.is_occupied ? "Occupied" : "Available"}
                 </span>
+                {unit.description && <p>{unit.description}</p>}
               </div>
               {user?.role === "tenant" && !unit.is_occupied && !unit.has_pending_application && (
                 <button
@@ -194,8 +208,9 @@ function PropertyDetailsPage() {
           <p>Applications are available to tenant accounts.</p>
         )}
       </section>
-      {user?.role === "landlord" && user.id === property.owner_id && (
-        <Link to="/manage/properties">Edit property records</Link>
+      {(user?.role === "landlord" || user?.role === "admin") &&
+        (user?.role === "admin" || user.id === property.owner_id) && (
+        <Link to={`/units?property_id=${property.id}`}>Manage this property&apos;s units</Link>
       )}
     </div>
   );

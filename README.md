@@ -65,7 +65,16 @@ Run the API from the `backend` directory:
 python run.py
 ```
 
-The API listens on `http://localhost:5000`. The development app factory creates missing tables; for production, use a migration workflow rather than relying on `create_all`.
+The API listens on `http://localhost:5000`. The development app factory creates missing tables; it does not add columns to existing tables. For an existing PostgreSQL database, apply the idempotent migrations from the `backend` directory in order:
+
+```sh
+psql "postgresql://<user>:<password>@localhost:5432/rental_management" \
+  -v ON_ERROR_STOP=1 -f migrations/001_add_unit_bedrooms.sql
+psql "postgresql://<user>:<password>@localhost:5432/rental_management" \
+  -v ON_ERROR_STOP=1 -f migrations/002_add_unit_type_description.sql
+```
+
+Replace the connection string with your database URL; do not commit credentials.
 
 ### 3. Start the React app
 
@@ -86,13 +95,14 @@ All API responses are JSON. Protected routes require `Authorization: Bearer <acc
 |---|---|---|
 | **Properties** | `GET/POST /api/properties`; `GET/PUT/DELETE /api/properties/<id>` | Authenticated users; results and changes are limited to owned records, except admins. |
 | **Tenants** | `GET/POST /api/tenants`; `GET/PUT/DELETE /api/tenants/<id>` | Landlords manage their own tenant records; linked tenants may view their own record and update permitted contact fields. |
-| **Units** | `GET/POST /api/units`; `GET/PUT/DELETE /api/units/<id>`; `GET/POST /api/properties/<property_id>/units` | Owning landlord or admin; deletion is blocked when a unit has lease history. |
+| **Units** | `GET/POST /api/units`; `GET/PUT/DELETE /api/units/<id>`; `GET/POST /api/properties/<property_id>/units`; public search at `GET /api/units/public` | Owning landlord or admin manage units; public search returns available units by default and supports location, bedrooms, bathrooms, rent range, unit type, availability, and pagination. Occupancy is derived from active lease dates. |
 | **Applications** | `GET/POST /api/applications`; `GET/PATCH /api/applications/<id>` | Tenants submit and view their own applications; landlords view applications for their units and approve or decline them. Approval links the applicant account to a tenant record and returns lease-form prefill values. |
 | **Leases** | `GET/POST /api/leases`; `GET/PUT/DELETE /api/leases/<id>`; tenant views at `/api/leases/mine` and `/api/leases/mine/payments` | Owning landlord or admin; tenants can view only their linked leases and payments; deleting a lease ends it to preserve history. |
-| **Payments** | `GET/POST /payments` | Landlords see/manage payments for their properties; tenants can view payments linked to their lease. |
+| **Payments** | `GET /api/payments` (also `/payments`); `POST /payments` | Landlords see payments for their properties; tenants see payments linked to their own lease. History includes tenant, property, and unit labels but no account credentials. |
 
-Collection endpoints for properties, tenants, units, leases, and payments support `page` and `per_page`, defaulting to page 1 and 10 records per page (maximum 100). For example: `GET /api/properties?page=2&per_page=10&q=Oak&city=Nairobi`. Paginated responses include the resource list and metadata (`page`, `per_page`, `total`, `pages`, `has_next`, and `has_prev`). Invalid pagination parameters return HTTP 400. Validation, authorization, missing records, and conflicts return an error message and an appropriate HTTP status.
 Collection endpoints for properties, tenants, units, applications, leases, and payments support `page` and `per_page`, defaulting to page 1 and 10 records per page (maximum 100). For example: `GET /api/properties?page=2&per_page=10&q=Oak&city=Nairobi`. Paginated responses include the resource list and metadata (`page`, `per_page`, `total`, `pages`, `has_next`, and `has_prev`). Invalid pagination parameters return HTTP 400. Validation, authorization, missing records, and conflicts return an error message and an appropriate HTTP status.
+
+Public rental search uses individual unit records, not property-level rent or bedroom estimates. For example, `GET /api/units/public?location=Nairobi&bedrooms=2&min_rent=10000&max_rent=20000&unit_type=two-bedroom&availability=vacant` returns matching unit details with the parent property location. `availability` accepts `vacant`, `occupied`, or `all` and defaults to `vacant`; occupancy is derived from active lease dates. Tenants can apply only for units without a current active lease.
 
 ## Testing and Quality Checks
 

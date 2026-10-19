@@ -1,6 +1,6 @@
 // Shared fetch helper for the units and leases API files.
 // Same behaviour as tenantsAPI.js: reads token from localStorage, {"error": "..."} messages.
-const BASE_URL = import.meta.env.VITE_API_URL || "";
+const BASE_URL = import.meta.env?.VITE_API_URL || "";
 export const TOKEN_KEY = "access_token";
 
 export function getToken() {
@@ -34,7 +34,7 @@ export async function request(path, options = {}) {
 
   if (!res.ok) {
     if (res.status === 401 || res.status === 422) {
-      throw new Error("Your session has expired. Please log in again.");
+      throw new Error("Your session has ended. Please sign in again to continue.");
     }
     throw new Error(data.error || `Request failed (${res.status}).`);
   }

@@ -71,6 +71,33 @@ export function listPublicProperties({
   return request(`?${params.toString()}`, {}, "/api/properties/public");
 }
 
+export function listPublicUnits({
+  page = 1,
+  perPage = 10,
+  q = "",
+  location = "",
+  bedrooms = "",
+  bathrooms = "",
+  minRent = "",
+  maxRent = "",
+  unitType = "",
+  availability = "vacant",
+} = {}) {
+  const params = new URLSearchParams({
+    page: String(page),
+    per_page: String(perPage),
+    availability,
+  });
+  if (q.trim()) params.set("q", q.trim());
+  if (location.trim()) params.set("location", location.trim());
+  if (String(bedrooms).trim()) params.set("bedrooms", String(bedrooms).trim());
+  if (String(bathrooms).trim()) params.set("bathrooms", String(bathrooms).trim());
+  if (String(minRent).trim()) params.set("min_rent", String(minRent).trim());
+  if (String(maxRent).trim()) params.set("max_rent", String(maxRent).trim());
+  if (unitType) params.set("unit_type", unitType);
+  return request(`?${params.toString()}`, {}, "/api/units/public");
+}
+
 export async function getProperty(id) {
   const data = await request(`/${encodeURIComponent(id)}`);
   return data.property;
@@ -85,9 +112,12 @@ export async function getPublicProperty(id) {
   return data.property;
 }
 
-export async function listPublicPropertyUnits(propertyId) {
+export async function listPublicPropertyUnits(propertyId, { unitId } = {}) {
+  const params = new URLSearchParams();
+  if (unitId) params.set("unit_id", String(unitId));
+  const query = params.size ? `?${params.toString()}` : "";
   return request(
-    `/${encodeURIComponent(propertyId)}/units`,
+    `/${encodeURIComponent(propertyId)}/units${query}`,
     {},
     "/api/properties/public"
   );
