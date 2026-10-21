@@ -17,7 +17,15 @@ from server.models_tenant import Tenant, TenantProfile
 
 @pytest.fixture
 def client():
-    app = create_app({"REQUIRE_TWO_FACTOR": False})
+    app = create_app({
+        "TESTING": True,
+        "SQLALCHEMY_DATABASE_URI": "sqlite:///:memory:",
+        "JWT_SECRET_KEY": "test-secret-key-for-tests-only-0123456789",
+        "REQUIRE_TWO_FACTOR": False,
+        "TENANT_PII_ENCRYPTION_KEY": (
+            "MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA="
+        ),
+    })
     with app.app_context():
         db.drop_all()
         db.create_all()

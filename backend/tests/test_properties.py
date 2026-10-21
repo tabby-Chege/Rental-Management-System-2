@@ -11,7 +11,15 @@ from tests.test_tenants import client, world  # noqa: F401
 
 
 def test_health_endpoint():
-    app = create_app()
+    app = create_app({
+        "TESTING": True,
+        "SQLALCHEMY_DATABASE_URI": "sqlite:///:memory:",
+        "JWT_SECRET_KEY": "test-secret-key-for-tests-only-0123456789",
+        "REQUIRE_TWO_FACTOR": False,
+        "TENANT_PII_ENCRYPTION_KEY": (
+            "MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA="
+        ),
+    })
     app.config["TESTING"] = True
 
     with app.test_client() as client:
@@ -22,7 +30,15 @@ def test_health_endpoint():
 
 
 def test_properties_require_authentication():
-    app = create_app()
+    app = create_app({
+        "TESTING": True,
+        "SQLALCHEMY_DATABASE_URI": "sqlite:///:memory:",
+        "JWT_SECRET_KEY": "test-secret-key-for-tests-only-0123456789",
+        "REQUIRE_TWO_FACTOR": False,
+        "TENANT_PII_ENCRYPTION_KEY": (
+            "MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA="
+        ),
+    })
     app.config["TESTING"] = True
 
     with app.test_client() as client:
