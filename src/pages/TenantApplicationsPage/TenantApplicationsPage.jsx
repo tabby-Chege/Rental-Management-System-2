@@ -67,8 +67,8 @@ function TenantApplicationsPage() {
       <p className="manage-status">Track your requests to property managers.</p>
       {loading && <p className="manage-status">Loading applications…</p>}
       {!loading && notifications.length > 0 && (
-        <section aria-label="Reservation notifications">
-          <h2>Reservation updates</h2>
+        <section aria-label="Notifications">
+          <h2>Updates</h2>
           <ul className="manage-list">
             {notifications.map((notification) => {
               const application = applications.find(
@@ -77,13 +77,19 @@ function TenantApplicationsPage() {
               return (
                 <li className="manage-card" key={notification.id}>
                   <div>
-                    <p>{notification.message}</p>
+                    <p>
+                      {notification.notification_type === "message" ? "New message: " : ""}
+                      {notification.message}
+                    </p>
                     <small>
                       {formatPropertyDate(
                         notification.created_at,
                         application?.property?.time_zone,
                       )}
                     </small>
+                    {notification.notification_type === "message" && (
+                      <p><Link to={`/messages?conversation=${notification.conversation_id}`}>Open conversation</Link></p>
+                    )}
                   </div>
                   {!notification.read_at && (
                     <button
@@ -129,6 +135,21 @@ function TenantApplicationsPage() {
                     application.payment_due_at,
                     application.property?.time_zone,
                   )}
+                  <ol className="tenant-application-timeline" aria-label="Application progress">
+                    {[
+                      { label: "Submitted", complete: true },
+                      { label: "Reviewed", complete: application.status !== "pending", current: application.status === "pending" },
+                      { label: "Payment", complete: ["paid", "leased"].includes(application.status), current: ["approved", "offered"].includes(application.status) },
+                      { label: "Lease", complete: application.status === "leased", current: application.status === "paid" },
+                    ].map((step) => (
+                      <li
+                        className={`${step.complete ? "is-complete" : ""}${step.current ? " is-current" : ""}`}
+                        key={step.label}
+                      >
+                        {step.label}
+                      </li>
+                    ))}
+                  </ol>
                 </p>
               )}
               {["approved", "offered"].includes(application.status) && (

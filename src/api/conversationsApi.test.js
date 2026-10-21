@@ -24,7 +24,7 @@ test("property questions start an authenticated conversation", async () => {
     });
   };
 
-  const result = await startConversation(4, "Is parking available?");
+  const result = await startConversation(4, "Is parking available?", { unit_id: 8 });
 
   assert.equal(result.conversation.id, 12);
   assert.equal(calls[0].url, "/api/conversations");
@@ -32,6 +32,7 @@ test("property questions start an authenticated conversation", async () => {
   assert.deepEqual(JSON.parse(calls[0].options.body), {
     property_id: 4,
     body: "Is parking available?",
+    unit_id: 8,
   });
   delete globalThis.localStorage;
   delete globalThis.fetch;

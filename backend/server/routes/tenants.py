@@ -76,9 +76,32 @@ def list_tenants():
         return error(pagination_error, 400)
 
     page, per_page = pagination
+    query = (
+        Tenant.query
+        if user.role == "admin"
+        else Tenant.query.filter_by(landlord_id=user.id)
+    )
+    property_id_value = request.args.get("property_id")
+    if property_id_value:
+        try:
+            property_id = int(property_id_value)
+        except ValueError:
+            return error("property_id must be a positive integer", 400)
+        if property_id < 1:
+            return error("property_id must be a positive integer", 400)
+        property_record = db.session.get(Property, property_id)
+        if not property_record or (
+            user.role != "admin" and property_record.owner_id != user.id
+        ):
+            return error("Property not found", 404)
+        property_tenant_ids = (
+            db.session.query(Lease.tenant_id)
+            .join(Unit, Lease.unit_id == Unit.id)
+            .filter(Unit.property_id == property_id)
+        )
+        query = query.filter(Tenant.id.in_(property_tenant_ids))
     result = (
-        Tenant.query.filter_by(landlord_id=user.id)
-        .order_by(Tenant.name, Tenant.id)
+        query.order_by(Tenant.name, Tenant.id)
         .paginate(page=page, per_page=per_page, error_out=False)
     )
     return {
