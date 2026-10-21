@@ -387,6 +387,14 @@ def apply_payment_effects(payment):
 
 
 def _create_payment_for_attempt(attempt, lease, provider_result):
+    receipt = provider_result.get("receipt_number")
+    if not isinstance(receipt, str) or not receipt.strip():
+        receipt = None
+    else:
+        receipt = receipt.strip()
+        if len(receipt) > 100:
+            raise ValueError("Provider receipt reference is too long")
+
     payment = Payment(
         lease_id=lease.id,
         amount=attempt.amount,
@@ -402,11 +410,22 @@ def _create_payment_for_attempt(attempt, lease, provider_result):
         status="Completed",
         provider=attempt.provider,
         provider_reference=provider_result.get("provider_reference"),
+        reference_code=receipt if attempt.provider == "mpesa" else None,
         payment_type=attempt.payment_type,
     )
     db.session.add(payment)
     db.session.flush()
     attempt.payment_id = payment.id
+
+    returned_metadata = provider_result.get("provider_data")
+    if isinstance(returned_metadata, dict):
+        existing_metadata = (
+            attempt.provider_data
+            if isinstance(attempt.provider_data, dict)
+            else {}
+        )
+        attempt.provider_data = {**existing_metadata, **returned_metadata}
+
     apply_payment_effects(payment)
     return payment
 

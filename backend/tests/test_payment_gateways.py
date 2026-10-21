@@ -1,3 +1,4 @@
+from types import SimpleNamespace
 from datetime import date, timedelta
 from decimal import Decimal
 
@@ -12,7 +13,7 @@ from server.models_payment import (
     RentSchedule,
 )
 from server.models_unit_lease import Lease
-from server.payment_providers import PROVIDERS, StripeProvider
+from server.payment_providers import PROVIDERS, StripeProvider, MpesaProvider
 from server.payment_service import _add_month, process_rent_schedules
 from tests.test_applications import apply, create_unit
 from tests.test_payments import make_lease
@@ -306,3 +307,166 @@ def test_stripe_checkout_uses_currency_minor_units(monkeypatch, client):
     assert result["provider_reference"] == "cs_test_1"
     assert observed["form"]["line_items[0][price_data][unit_amount]"] == "1234"
     assert observed["form"]["line_items[0][price_data][currency]"] == "kes"
+
+
+def _setup_mpesa_verification_test(client, monkeypatch, result_code="0"):
+    client.application.config.update(
+        DARAJA_SHORTCODE="174379",
+        DARAJA_PASSKEY="test-passkey",
+    )
+
+    provider = MpesaProvider()
+    attempt = SimpleNamespace(
+        provider_reference="ws_CO_TEST123",
+        amount=Decimal("500"),
+        phone_number="0712345678",
+    )
+
+    monkeypatch.setattr(
+        provider,
+        "_access_token",
+        lambda: "test-access-token",
+    )
+    monkeypatch.setattr(
+        "server.payment_providers._request_json",
+        lambda *args, **kwargs: {"ResultCode": result_code},
+    )
+
+    callback = {
+        "Body": {
+            "stkCallback": {
+                "MerchantRequestID": "merchant-test",
+                "CheckoutRequestID": "ws_CO_TEST123",
+                "ResultCode": 0,
+                "CallbackMetadata": {
+                    "Item": [
+                        {"Name": "Amount", "Value": 500},
+                        {"Name": "MpesaReceiptNumber", "Value": "TESTRECEIPT1"},
+                        {"Name": "TransactionDate", "Value": 20261021150000},
+                        {"Name": "PhoneNumber", "Value": 254712345678},
+                    ]
+                },
+            }
+        }
+    }
+
+    return provider, attempt, callback
+
+
+def test_mpesa_verification_accepts_matching_successful_callback(
+    client, monkeypatch
+):
+    provider, attempt, callback = _setup_mpesa_verification_test(
+        client, monkeypatch
+    )
+
+    with client.application.app_context():
+        result = provider.verify(attempt, callback)
+
+    assert result["status"] == "completed"
+    assert result["amount"] == Decimal("500")
+    assert result["currency"] == "KES"
+    assert result["provider_reference"] == "ws_CO_TEST123"
+    assert result["receipt_number"] == "TESTRECEIPT1"
+
+
+def test_mpesa_verification_rejects_incorrect_amount(
+    client, monkeypatch
+):
+    provider, attempt, callback = _setup_mpesa_verification_test(
+        client, monkeypatch
+    )
+    callback["Body"]["stkCallback"]["CallbackMetadata"]["Item"][0]["Value"] = 700
+
+    with client.application.app_context():
+        result = provider.verify(attempt, callback)
+
+    assert result["status"] == "pending"
+
+
+def test_mpesa_verification_rejects_mismatched_phone(
+    client, monkeypatch
+):
+    provider, attempt, callback = _setup_mpesa_verification_test(
+        client, monkeypatch
+    )
+    callback["Body"]["stkCallback"]["CallbackMetadata"]["Item"][3]["Value"] = (
+        254799999999
+    )
+
+    with client.application.app_context():
+        result = provider.verify(attempt, callback)
+
+    assert result["status"] == "pending"
+
+
+def test_mpesa_verification_stays_pending_without_callback_metadata(
+    client, monkeypatch
+):
+    provider, attempt, _ = _setup_mpesa_verification_test(
+        client, monkeypatch
+    )
+
+    with client.application.app_context():
+        result = provider.verify(attempt, {})
+
+    assert result["status"] == "pending"
+
+
+def test_mpesa_verification_marks_unsuccessful_query_as_failed(
+    client, monkeypatch
+):
+    provider, attempt, callback = _setup_mpesa_verification_test(
+        client, monkeypatch, result_code="1032"
+    )
+
+    with client.application.app_context():
+        result = provider.verify(attempt, callback)
+
+    assert result["status"] == "failed"
+
+def test_mpesa_receipt_and_provider_metadata_are_persisted(client, world):
+    from server.payment_service import _create_payment_for_attempt
+
+    lease_id = make_lease(client, world)
+    lease = db.session.get(Lease, lease_id)
+
+    attempt = PaymentAttempt(
+        user_id=world["ids"]["tenant_user"],
+        lease_id=lease_id,
+        idempotency_key="mpesa-receipt-persistence-test",
+        provider="mpesa",
+        provider_reference="ws_CO_PERSIST123",
+        amount=Decimal("500"),
+        currency="KES",
+        payment_type="rent",
+        status="pending",
+        customer_email="tenant@example.com",
+        phone_number="0712345678",
+        provider_data={"merchant_request_id": "merchant-persist-test"},
+    )
+    db.session.add(attempt)
+    db.session.flush()
+
+    result = {
+        "provider_reference": "ws_CO_PERSIST123",
+        "receipt_number": "TESTRECEIPT99",
+        "provider_data": {
+            "receipt_number": "TESTRECEIPT99",
+            "transaction_date": "20261021150000",
+            "phone_number": "254712345678",
+        },
+    }
+
+    with client.application.app_context():
+        payment = _create_payment_for_attempt(attempt, lease, result)
+        db.session.flush()
+
+        assert payment.reference_code == "TESTRECEIPT99"
+        assert payment.provider_reference == "ws_CO_PERSIST123"
+        assert attempt.payment_id == payment.id
+        assert attempt.provider_data["merchant_request_id"] == "merchant-persist-test"
+        assert attempt.provider_data["receipt_number"] == "TESTRECEIPT99"
+        assert attempt.provider_data["transaction_date"] == "20261021150000"
+        assert attempt.provider_data["phone_number"] == "254712345678"
+

@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { listApplications } from "../../api/applicationsApi";
-import PaymentCheckoutForm from "../../components/PaymentCheckoutForm";
+import PaymentCheckoutForm from "../../Components/PaymentCheckoutForm";
 import {
   listNotifications,
   markNotificationRead,

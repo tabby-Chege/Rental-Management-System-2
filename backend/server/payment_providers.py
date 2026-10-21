@@ -461,6 +461,7 @@ class MpesaProvider(BaseProvider):
 
     def verify(self, attempt, webhook=None):
         _require_config("DARAJA_SHORTCODE", "DARAJA_PASSKEY")
+
         timestamp = time.strftime("%Y%m%d%H%M%S", time.gmtime())
         response = _request_json(
             f"{_daraja_base()}/mpesa/stkpushquery/v1/query",
@@ -473,19 +474,117 @@ class MpesaProvider(BaseProvider):
                 "CheckoutRequestID": attempt.provider_reference,
             },
         )
+
         result_code = response.get("ResultCode")
+
+        if result_code in (None, ""):
+            return {
+                "status": "pending",
+                "provider_reference": attempt.provider_reference,
+            }
+
+        if str(result_code) != "0":
+            return {
+                "status": "failed",
+                "provider_reference": attempt.provider_reference,
+            }
+
+        # A successful query does not independently provide the
+        # transaction amount, receipt number, or payer phone number.
+        # Do not complete the payment without callback details.
+        if not isinstance(webhook, dict):
+            return {
+                "status": "pending",
+                "provider_reference": attempt.provider_reference,
+            }
+
+        try:
+            callback = webhook["Body"]["stkCallback"]
+            callback_reference = callback["CheckoutRequestID"]
+            callback_result_code = callback["ResultCode"]
+            items = callback["CallbackMetadata"]["Item"]
+        except (KeyError, TypeError):
+            return {
+                "status": "pending",
+                "provider_reference": attempt.provider_reference,
+            }
+
+        if (
+            callback_reference != attempt.provider_reference
+            or str(callback_result_code) != "0"
+            or not isinstance(items, list)
+        ):
+            return {
+                "status": "pending",
+                "provider_reference": attempt.provider_reference,
+            }
+
+        metadata = {
+            item.get("Name"): item.get("Value")
+            for item in items
+            if isinstance(item, dict) and item.get("Name")
+        }
+
+        amount = metadata.get("Amount")
+        receipt = metadata.get("MpesaReceiptNumber")
+        callback_phone = metadata.get("PhoneNumber")
+
+        if (
+            amount is None
+            or not isinstance(receipt, str)
+            or not receipt.strip()
+            or callback_phone is None
+            or not attempt.phone_number
+        ):
+            return {
+                "status": "pending",
+                "provider_reference": attempt.provider_reference,
+            }
+
+        def normalize_phone(value):
+            digits = "".join(
+                character
+                for character in str(value)
+                if character.isdigit()
+            )
+            if digits.startswith("0"):
+                digits = "254" + digits[1:]
+            elif len(digits) == 9:
+                digits = "254" + digits
+            return digits
+
+        try:
+            confirmed_amount = Decimal(str(amount))
+        except (ValueError, TypeError, ArithmeticError):
+            return {
+                "status": "pending",
+                "provider_reference": attempt.provider_reference,
+            }
+
+        if (
+            not confirmed_amount.is_finite()
+            or confirmed_amount != Decimal(str(attempt.amount))
+            or normalize_phone(callback_phone)
+            != normalize_phone(attempt.phone_number)
+        ):
+            return {
+                "status": "pending",
+                "provider_reference": attempt.provider_reference,
+            }
+
         return {
-            "status": (
-                "completed"
-                if str(result_code) == "0"
-                else "failed"
-                if result_code not in (None, "")
-                else "pending"
-            ),
-            "provider_reference": attempt.provider_reference,
-            "amount": Decimal(attempt.amount),
+            "status": "completed",
+            "provider_reference": callback_reference,
+            "amount": confirmed_amount,
             "currency": "KES",
-            "provider_time": None,
+            "receipt_number": receipt.strip(),
+            "provider_time": metadata.get("TransactionDate"),
+            "provider_data": {
+                "mpesa_receipt_number": receipt.strip(),
+                "transaction_date": metadata.get("TransactionDate"),
+                "phone_number": str(callback_phone),
+                "merchant_request_id": callback.get("MerchantRequestID"),
+            },
         }
 
     def webhook_reference(self, payload):

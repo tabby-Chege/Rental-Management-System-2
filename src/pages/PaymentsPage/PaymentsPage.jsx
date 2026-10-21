@@ -13,7 +13,7 @@ import {
 import { listLeases, listMyLeases } from "../../api/leasesAPI";
 import { getCurrentUser } from "../../api/authAPI";
 import { CURRENCY_CODES, currencyPrecision, formatMoney } from "../../utils/money";
-import PaymentCheckoutForm from "../../components/PaymentCheckoutForm";
+import PaymentCheckoutForm from "../../Components/PaymentCheckoutForm";
 import "../manage.css";
 
 const PER_PAGE = 10;
