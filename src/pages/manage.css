@@ -164,9 +164,16 @@
   color: #7a4b00;
 }
 
+.manage-badge.is-reserved {
+  background: #fff3cd;
+  color: #785900;
+}
+
 .manage-badge.is-ended,
 .manage-badge.is-terminated,
-.manage-badge.is-declined {
+.manage-badge.is-declined,
+.manage-badge.is-expired,
+.manage-badge.is-waitlisted {
   background: #ececec;
   color: #444;
 }
@@ -177,6 +184,17 @@
 }
 
 .manage-badge.is-approved {
+  background: #e3f3e8;
+  color: #17592f;
+}
+
+.manage-badge.is-offered {
+  background: #fff3cd;
+  color: #785900;
+}
+
+.manage-badge.is-paid,
+.manage-badge.is-leased {
   background: #e3f3e8;
   color: #17592f;
 }

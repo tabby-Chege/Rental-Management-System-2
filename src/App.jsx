@@ -41,10 +41,15 @@ function AppShellNav() {
       .catch(() => setUser(null));
   }, [token, location.pathname]);
 
-  const handleLogout = () => {
-    logoutUser();
-    setUser(null);
-    navigate("/login", { replace: true });
+  const handleLogout = async () => {
+    try {
+      await logoutUser();
+    } catch (error) {
+      console.error("Server sign-out could not revoke the refresh token.", error);
+    } finally {
+      setUser(null);
+      navigate("/login", { replace: true });
+    }
   };
 
   const isLandlord = user?.role === "landlord" || user?.role === "admin";

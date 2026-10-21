@@ -3,12 +3,16 @@ from datetime import date, timedelta
 
 os.environ["DATABASE_URL"] = "sqlite:///:memory:"
 os.environ["JWT_SECRET_KEY"] = "test-secret-key-for-tests-only-0123456789"
+os.environ["TENANT_PII_ENCRYPTION_KEY"] = (
+    "MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA="
+)
 
 import pytest
 
 from server import create_app
 from server.extensions import db
 from server.models import User
+from server.models_tenant import Tenant, TenantProfile
 
 
 @pytest.fixture
@@ -26,6 +30,21 @@ def make_user(name, email, role):
     user.set_password("password123")
     db.session.add(user)
     db.session.commit()
+    if role == "tenant":
+        db.session.add(
+            TenantProfile(
+                user_id=user.id,
+                full_name=name,
+                phone="+254700000000",
+                employment_status="employed",
+                employer="Example employer",
+                job_title="Staff member",
+                emergency_contact_name="Alex Contact",
+                emergency_contact_phone="+254711111111",
+                emergency_contact_relationship="Sibling",
+            )
+        )
+        db.session.commit()
     return user.id
 
 
@@ -51,36 +70,57 @@ def world(client):
     }
 
 
-def create(client, headers, **body):
+def seed_tenant(client, landlord_id, **body):
     body.setdefault("name", "Tess Tenant")
     body.setdefault("email", "tess@x.com")
-    return client.post("/api/tenants", json=body, headers=headers)
+    with client.application.app_context():
+        tenant = Tenant(
+            landlord_id=landlord_id,
+            user_id=body.get("user_id"),
+            name=body["name"],
+            email=body["email"],
+            phone=body.get("phone"),
+        )
+        db.session.add(tenant)
+        db.session.commit()
+        return tenant.to_dict()
 
 
 def test_requires_login(client):
     assert client.get("/api/tenants").status_code == 401
 
 
-def test_landlord_creates_and_lists(client, world):
-    res = create(client, world["landlord"], phone="0700")
-    assert res.status_code == 201
-    assert res.get_json()["tenant"]["landlord_id"] == world["ids"]["landlord"]
+def test_landlord_lists_tenants(client, world):
+    tenant = seed_tenant(
+        client, world["ids"]["landlord"], phone="+254700000000"
+    )
     listing = client.get("/api/tenants", headers=world["landlord"]).get_json()
     assert len(listing["tenants"]) == 1
+    assert listing["tenants"][0]["id"] == tenant["id"]
     assert listing["pagination"]["total"] == 1
+
+
+def test_landlords_cannot_manually_create_tenant_records(client, world):
+    response = client.post(
+        "/api/tenants",
+        headers=world["landlord"],
+        json={"name": "Tess", "email": "tess@example.com"},
+    )
+    assert response.status_code == 405
 
 
 def test_tenant_list_pagination_is_scoped_to_landlord(client, world):
     for index in range(3):
-        response = create(
+        seed_tenant(
             client,
-            world["landlord"],
+            world["ids"]["landlord"],
             name=f"Tenant {index}",
             email=f"tenant{index}@x.com",
         )
-        assert response.status_code == 201
 
-    create(client, world["other"], name="Other tenant", email="other@x.com")
+    seed_tenant(
+        client, world["ids"]["other"], name="Other tenant", email="other@x.com"
+    )
 
     first = client.get(
         "/api/tenants?page=1&per_page=2", headers=world["landlord"]
@@ -105,28 +145,29 @@ def test_tenant_list_rejects_invalid_pagination(client, world):
 
 def test_tenant_cannot_list_or_create(client, world):
     assert client.get("/api/tenants", headers=world["tenant"]).status_code == 403
-    assert create(client, world["tenant"]).status_code == 403
+    assert client.post(
+        "/api/tenants", headers=world["tenant"], json={}
+    ).status_code == 405
 
 
 def test_linked_tenant_can_update_own_details_only(client, world):
-    created = create(
+    seed_tenant(
         client,
-        world["landlord"],
+        world["ids"]["landlord"],
         name="Tom",
         email="tom@x.com",
-        phone="0700",
+        phone="+254700000000",
         user_id=world["ids"]["tenant_user"],
     )
-    assert created.status_code == 201
 
     updated = client.put(
         "/api/tenants/me",
         headers=world["tenant"],
-        json={"email": "tom.updated@x.com", "phone": "0711"},
+        json={"email": "tom.updated@x.com", "phone": "+254711000000"},
     )
     assert updated.status_code == 200
     assert updated.get_json()["tenant"]["email"] == "tom.updated@x.com"
-    assert updated.get_json()["tenant"]["phone"] == "0711"
+    assert updated.get_json()["tenant"]["phone"] == "+254711000000"
     assert client.put(
         "/api/tenants/me",
         headers=world["tenant"],
@@ -135,27 +176,28 @@ def test_linked_tenant_can_update_own_details_only(client, world):
     assert client.put(
         "/api/tenants/me",
         headers=world["landlord"],
-        json={"phone": "0712"},
+        json={"phone": "+254712000000"},
     ).status_code == 403
 
 
 def test_validation_and_bad_json(client, world):
-    assert create(client, world["landlord"], name="").status_code == 400
-    assert create(client, world["landlord"], email="nope").status_code == 400
     res = client.post("/api/tenants", data="not json", headers=world["landlord"])
-    assert res.status_code == 400
-    assert create(client, world["landlord"], user_id=9999).status_code == 400
+    assert res.status_code == 405
 
 
-def test_duplicate_email_case_insensitive(client, world):
-    assert create(client, world["landlord"]).status_code == 201
-    assert create(client, world["landlord"], email="TESS@x.com").status_code == 409
-    # a different landlord may use the same email
-    assert create(client, world["other"]).status_code == 201
+def test_landlord_cannot_change_tenant_email_to_a_duplicate(client, world):
+    first = seed_tenant(client, world["ids"]["landlord"], email="first@x.com")
+    second = seed_tenant(client, world["ids"]["landlord"], email="second@x.com")
+    response = client.put(
+        f"/api/tenants/{second['id']}",
+        headers=world["landlord"],
+        json={"email": first["email"]},
+    )
+    assert response.status_code == 409
 
 
 def test_landlords_cannot_see_each_others_tenants(client, world):
-    tid = create(client, world["landlord"]).get_json()["tenant"]["id"]
+    tid = seed_tenant(client, world["ids"]["landlord"])["id"]
     assert client.get("/api/tenants/%d" % tid, headers=world["other"]).status_code == 404
     assert client.put("/api/tenants/%d" % tid, json={"name": "Hax"}, headers=world["other"]).status_code == 404
     assert client.get("/api/tenants", headers=world["other"]).get_json()["tenants"] == []
@@ -163,8 +205,10 @@ def test_landlords_cannot_see_each_others_tenants(client, world):
 
 def test_tenant_sees_only_own_record(client, world):
     uid = world["ids"]["tenant_user"]
-    mine = create(client, world["landlord"], user_id=uid).get_json()["tenant"]["id"]
-    theirs = create(client, world["landlord"], email="b@x.com").get_json()["tenant"]["id"]
+    mine = seed_tenant(client, world["ids"]["landlord"], user_id=uid)["id"]
+    theirs = seed_tenant(
+        client, world["ids"]["landlord"], email="b@x.com"
+    )["id"]
     assert client.get("/api/tenants/me", headers=world["tenant"]).get_json()["tenant"]["id"] == mine
     assert client.get("/api/tenants/%d" % mine, headers=world["tenant"]).status_code == 200
     assert client.get("/api/tenants/%d" % theirs, headers=world["tenant"]).status_code == 404
@@ -172,13 +216,13 @@ def test_tenant_sees_only_own_record(client, world):
 
 
 def test_tenant_details_include_only_own_current_property_and_lease(client, world):
-    tenant = create(
+    tenant = seed_tenant(
         client,
-        world["landlord"],
+        world["ids"]["landlord"],
         name="Tom",
         email="tom@x.com",
         user_id=world["ids"]["tenant_user"],
-    ).get_json()["tenant"]
+    )
     property_record = client.post(
         "/api/properties",
         headers=world["landlord"],
@@ -224,21 +268,26 @@ def test_tenant_details_include_only_own_current_property_and_lease(client, worl
 
 def test_tenant_can_edit_only_contact_fields(client, world):
     uid = world["ids"]["tenant_user"]
-    tid = create(client, world["landlord"], user_id=uid).get_json()["tenant"]["id"]
-    ok = client.put("/api/tenants/%d" % tid, json={"phone": "0711"}, headers=world["tenant"])
-    assert ok.status_code == 200 and ok.get_json()["tenant"]["phone"] == "0711"
+    tid = seed_tenant(client, world["ids"]["landlord"], user_id=uid)["id"]
+    ok = client.put("/api/tenants/%d" % tid, json={"phone": "+254711000000"}, headers=world["tenant"])
+    assert ok.status_code == 200 and ok.get_json()["tenant"]["phone"] == "+254711000000"
     for field in ("name", "user_id"):
         res = client.put("/api/tenants/%d" % tid, json={field: "x"}, headers=world["tenant"])
         assert res.status_code == 403
 
 
 def test_landlord_can_edit_all_and_link_rules(client, world):
-    tid = create(client, world["landlord"]).get_json()["tenant"]["id"]
+    tid = seed_tenant(client, world["ids"]["landlord"])["id"]
     uid = world["ids"]["tenant_user"]
-    res = client.put("/api/tenants/%d" % tid, json={"name": "New", "user_id": uid}, headers=world["landlord"])
-    assert res.status_code == 200 and res.get_json()["tenant"]["user_id"] == uid
-    other = create(client, world["landlord"], email="c@x.com").get_json()["tenant"]["id"]
-    clash = client.put("/api/tenants/%d" % other, json={"user_id": uid}, headers=world["landlord"])
-    assert clash.status_code == 409
-    not_tenant = client.put("/api/tenants/%d" % other, json={"user_id": world["ids"]["other"]}, headers=world["landlord"])
-    assert not_tenant.status_code == 400
+    res = client.put(
+        "/api/tenants/%d" % tid,
+        json={"name": "New"},
+        headers=world["landlord"],
+    )
+    assert res.status_code == 200 and res.get_json()["tenant"]["name"] == "New"
+    forbidden_link = client.put(
+        "/api/tenants/%d" % tid,
+        json={"user_id": uid},
+        headers=world["landlord"],
+    )
+    assert forbidden_link.status_code == 403

@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import SearchBar from "../../Components/SearchBar/SearchBar";
 import { listPublicUnits } from "../../api/propertiesApi";
 import { formatBedroomCount, formatUnitType } from "../../utils/unitForm";
+import { formatMoney } from "../../utils/money";
 import "./SearchPage.css";
 
 const PER_PAGE = 9;
@@ -184,6 +185,7 @@ function SearchPage() {
             }}
           >
             <option value="vacant">Available units</option>
+            <option value="reserved">Reserved units</option>
             <option value="all">All units</option>
             <option value="occupied">Occupied only</option>
           </select>
@@ -232,20 +234,29 @@ function SearchPage() {
                   <h2>{unit.property_name} · Unit {unit.unit_number}</h2>
                 </div>
                 <p className="property-card-address">
-                  {unit.property_address}, {unit.property_city}, {unit.property_state}
-                  {unit.property_zip_code ? ` ${unit.property_zip_code}` : ""}
+                  {unit.property_address_line || unit.property_address}, {unit.property_city}
+                  {unit.property_region || unit.property_state ? `, ${unit.property_region || unit.property_state}` : ""}
+                  {unit.property_postal_code || unit.property_zip_code ? ` ${unit.property_postal_code || unit.property_zip_code}` : ""}
                 </p>
                 <p className="property-card-layouts">
                   {formatUnitType(unit.unit_type, unit.bedrooms)} · {formatBedroomCount(unit.bedrooms)}
+                  {unit.layout ? ` · Layout ${unit.layout}` : ""}
                   {unit.bathrooms != null ? ` · ${unit.bathrooms} bathrooms` : ""}
+                  {unit.size != null ? ` · ${unit.size} ${unit.size_unit}` : ""}
+                  {unit.furnished ? " · Furnished" : ""}
+                  {unit.floor_number != null ? ` · Floor ${unit.floor_number}` : ""}
                 </p>
                 <p>
                   {unit.rent_amount != null
-                    ? `KES ${Number(unit.rent_amount).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} per month`
+                    ? `${formatMoney(unit.rent_amount, unit.currency)} per month`
                     : "Rent not specified"}
                 </p>
                 <span className={`unit-availability is-${unit.availability_status}`}>
-                  {unit.availability_status === "occupied" ? "Occupied" : "Available"}
+                  {unit.availability_status === "occupied"
+                    ? "Occupied"
+                    : unit.availability_status === "reserved"
+                      ? "Reserved"
+                      : "Available"}
                 </span>
                 {unit.description && <p>{unit.description}</p>}
               </Link>

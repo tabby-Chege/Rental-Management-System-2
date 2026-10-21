@@ -6,6 +6,7 @@ import {
   deleteProperty,
   getProperty,
   getPublicProperty,
+  getPropertiesSummary,
   listPublicUnits,
   listProperties,
   listPublicProperties,
@@ -14,8 +15,11 @@ import {
 } from "./propertiesApi.js";
 
 function mockBrowser(token = "test-token") {
+  const storage = new Map([["access_token", token]]);
   globalThis.localStorage = {
-    getItem: () => token,
+    getItem: (key) => storage.get(key) ?? null,
+    setItem: (key, value) => storage.set(key, value),
+    removeItem: (key) => storage.delete(key),
   };
 }
 
@@ -71,6 +75,7 @@ test("public search and property detail use the public listing endpoints", async
     bedrooms: "2",
     available: "true",
   });
+
   assert.deepEqual(await getPublicProperty(7), { id: 7 });
   assert.deepEqual(await listPublicPropertyUnits(7, { unitId: 11 }), { units: [{ id: 11 }] });
   assert.equal(
@@ -82,6 +87,28 @@ test("public search and property detail use the public listing endpoints", async
     "/api/properties/public/7/units?unit_id=11",
   ]);
 
+  delete globalThis.localStorage;
+  delete globalThis.fetch;
+});
+
+test("public property detail loads units across every result page", async () => {
+  mockBrowser();
+  const calls = [];
+  globalThis.fetch = async (url) => {
+    calls.push(url);
+    const page = new URL(url, "http://localhost").searchParams.get("page");
+    return mockResponse({
+      units: [{ id: Number(page) }],
+      pagination: { pages: 2 },
+    });
+  };
+
+  const result = await listPublicPropertyUnits(7);
+  assert.deepEqual(result.units, [{ id: 1 }, { id: 2 }]);
+  assert.deepEqual(calls, [
+    "/api/properties/public/7/units?page=1&per_page=100",
+    "/api/properties/public/7/units?page=2&per_page=100",
+  ]);
   delete globalThis.localStorage;
   delete globalThis.fetch;
 });
@@ -149,6 +176,22 @@ test("property API exposes CRUD operations and surfaces API errors", async () =>
   await assert.rejects(listProperties(), {
     message: "Not allowed",
     status: 403,
+  });
+
+  test("portfolio summary uses the authenticated property summary endpoint", async () => {
+    mockBrowser();
+    let requestedUrl;
+    globalThis.fetch = async (url) => {
+      requestedUrl = url;
+      return mockResponse({ occupancy_summary: { total_units: 20 } });
+    };
+
+    assert.deepEqual(await getPropertiesSummary(), {
+      occupancy_summary: { total_units: 20 },
+    });
+    assert.equal(requestedUrl, "/api/properties/summary");
+    delete globalThis.localStorage;
+    delete globalThis.fetch;
   });
 
   globalThis.fetch = async () => mockResponse({

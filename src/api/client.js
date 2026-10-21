@@ -1,11 +1,8 @@
 // Shared fetch helper for the units and leases API files.
 // Same behaviour as tenantsAPI.js: reads token from localStorage, {"error": "..."} messages.
-const BASE_URL = import.meta.env?.VITE_API_URL || "";
-export const TOKEN_KEY = "access_token";
+import { authenticatedFetch, getToken } from "./authAPI.js";
 
-export function getToken() {
-  return localStorage.getItem(TOKEN_KEY);
-}
+const BASE_URL = import.meta.env?.VITE_API_URL || "";
 
 export async function request(path, options = {}) {
   const token = getToken();
@@ -13,11 +10,10 @@ export async function request(path, options = {}) {
 
   let res;
   try {
-    res = await fetch(`${BASE_URL}${path}`, {
+    res = await authenticatedFetch(`${BASE_URL}${path}`, {
       ...options,
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${token}`,
         ...options.headers,
       },
     });

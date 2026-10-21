@@ -326,6 +326,11 @@
   color: #991b1b;
 }
 
+.unit-availability.is-reserved {
+  background: #fff3cd;
+  color: #785900;
+}
+
 .property-card-badges {
   display: flex;
   gap: 6px;

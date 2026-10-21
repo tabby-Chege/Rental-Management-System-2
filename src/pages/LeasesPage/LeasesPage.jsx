@@ -4,6 +4,7 @@ import { createLease, deleteLease, listLeases, updateLease } from "../../api/lea
 import { listTenants } from "../../api/tenantsApi";
 import { listProperties, listUnits } from "../../api/unitsAPI";
 import { validateLeaseForm } from "../../utils/leaseForm";
+import { CURRENCY_CODES, currencyPrecision, formatMoney } from "../../utils/money";
 import "../manage.css";
 
 const STATUSES = ["active", "ended", "terminated"];
@@ -16,9 +17,6 @@ const EMPTY_FORM = {
   deposit: "",
   status: "active",
 };
-
-const money = (value) =>
-  Number(value).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
 function describeUnit(unit, properties) {
   const property = properties.find((p) => p.id === unit.property_id);
@@ -34,6 +32,7 @@ function leaseToForm(lease) {
     monthly_rent: lease.monthly_rent,
     deposit: lease.deposit ?? "",
     status: lease.status,
+    currency: lease.currency,
   };
 }
 
@@ -66,6 +65,10 @@ function LeaseForm({ initial, units, properties, tenants, isEdit, submitLabel, o
   const [errors, setErrors] = useState({});
   const [submitError, setSubmitError] = useState("");
   const [isSaving, setIsSaving] = useState(false);
+  const currency =
+    units.find((unit) => String(unit.id) === String(form.unit_id))?.currency
+    || initial.currency
+    || CURRENCY_CODES[0];
 
   function handleChange(event) {
     setForm((current) => ({ ...current, [event.target.name]: event.target.value }));
@@ -73,7 +76,7 @@ function LeaseForm({ initial, units, properties, tenants, isEdit, submitLabel, o
 
   async function handleSubmit(event) {
     event.preventDefault();
-    const found = validateLeaseForm(form, { requireUnit: !isEdit });
+    const found = validateLeaseForm(form, { requireUnit: !isEdit, currency });
     setErrors(found);
     if (Object.keys(found).length > 0) return;
 
@@ -121,11 +124,11 @@ function LeaseForm({ initial, units, properties, tenants, isEdit, submitLabel, o
       <Field label="End date" error={errors.end_date}>
         <input type="date" name="end_date" value={form.end_date} onChange={handleChange} aria-invalid={invalid("end_date")} />
       </Field>
-      <Field label="Monthly rent" error={errors.monthly_rent}>
-        <input type="number" min="0" step="0.01" name="monthly_rent" value={form.monthly_rent} onChange={handleChange} aria-invalid={invalid("monthly_rent")} />
+      <Field label={`Monthly rent (${currency})`} error={errors.monthly_rent}>
+        <input type="number" min="0" step={10 ** -currencyPrecision(currency)} name="monthly_rent" value={form.monthly_rent} onChange={handleChange} aria-invalid={invalid("monthly_rent")} />
       </Field>
-      <Field label="Deposit (optional)" error={errors.deposit}>
-        <input type="number" min="0" step="0.01" name="deposit" value={form.deposit} onChange={handleChange} aria-invalid={invalid("deposit")} />
+      <Field label={`Deposit (${currency}, optional)`} error={errors.deposit}>
+        <input type="number" min="0" step={10 ** -currencyPrecision(currency)} name="deposit" value={form.deposit} onChange={handleChange} aria-invalid={invalid("deposit")} />
       </Field>
       <Field label="Status" error={errors.status}>
         <select name="status" value={form.status} onChange={handleChange}>
@@ -300,7 +303,7 @@ function LeasesPage() {
                     {lease.start_date} to {lease.end_date}
                   </p>
                   <p>
-                    Rent {money(lease.monthly_rent)} per month, deposit {money(lease.deposit)}
+                    Rent {formatMoney(lease.monthly_rent, lease.currency)} per month, deposit {formatMoney(lease.deposit, lease.currency)}
                   </p>
                 </div>
                 <div className="manage-actions">

@@ -57,6 +57,100 @@
   font-size: 15px;
 }
 
+.details-occupancy-summary {
+  margin: -16px 0 24px;
+  padding: 14px 18px;
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  background: #fff;
+  color: #374151;
+}
+
+.listing-photos,
+.listing-report {
+  margin-bottom: 24px;
+}
+
+.listing-photo-gallery {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 12px;
+  margin: 12px 0;
+}
+
+.listing-photo {
+  min-width: 0;
+  margin: 0;
+}
+
+.listing-photo img {
+  display: block;
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  object-fit: cover;
+  border-radius: 8px;
+}
+
+.listing-photo figcaption {
+  margin-top: 4px;
+  color: #4b5563;
+  font-size: 13px;
+}
+
+.photo-actions,
+.photo-upload-control,
+.listing-report form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.photo-actions button,
+.listing-report button {
+  min-height: 36px;
+  padding: 6px 12px;
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  background: #fff;
+  cursor: pointer;
+}
+
+.photo-upload-control input[type="file"] {
+  max-width: 100%;
+}
+
+.listing-report summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.listing-report form {
+  align-items: stretch;
+  flex-direction: column;
+  max-width: 480px;
+}
+
+.listing-report form label {
+  display: grid;
+  gap: 6px;
+}
+
+.listing-report select,
+.listing-report textarea {
+  font: inherit;
+  padding: 8px;
+}
+
+.listing-report textarea {
+  min-height: 88px;
+}
+
+.unit-listing-photos {
+  margin-top: 12px;
+}
+
 .details-occupancy {
   background: #fff;
   border: 1px solid #e5e7eb;
@@ -243,6 +337,28 @@
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
   gap: 16px;
   margin-top: 20px;
+}
+
+.application-wizard {
+  display: block;
+  padding: 20px;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  background: #fff;
+}
+
+.application-wizard h3,
+.application-wizard h4 {
+  margin: 0 0 12px;
+}
+
+.application-steps {
+  color: #6b7280;
+  font-size: 14px;
+}
+
+.application-wizard .manage-actions {
+  margin-top: 16px;
 }
 
 .application-form label {

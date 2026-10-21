@@ -32,8 +32,21 @@ function Register() {
       return;
     }
 
-    if (formData.password.length < 8) {
-      setError("Password must be at least 8 characters long.");
+    if (
+      formData.password.length < 10 ||
+      !/[a-z]/.test(formData.password) ||
+      !/[A-Z]/.test(formData.password) ||
+      !/[0-9]/.test(formData.password) ||
+      !/[^a-zA-Z0-9]/.test(formData.password)
+    ) {
+      setError(
+        "Use at least 10 characters, including uppercase and lowercase letters, a number, and a symbol.",
+      );
+      return;
+    }
+
+    if (new TextEncoder().encode(formData.password).length > 72) {
+      setError("Password must be no more than 72 UTF-8 bytes.");
       return;
     }
 
@@ -115,9 +128,13 @@ function Register() {
             value={formData.password}
             onChange={handleChange}
             autoComplete="new-password"
-            minLength={8}
+            minLength={10}
+            maxLength={72}
             required
           />
+          <p className="auth-description">
+            Use 10 or more characters with uppercase and lowercase letters, a number, and a symbol.
+          </p>
 
           <label htmlFor="confirmPassword">Confirm password</label>
           <input
@@ -127,7 +144,8 @@ function Register() {
             value={formData.confirmPassword}
             onChange={handleChange}
             autoComplete="new-password"
-            minLength={8}
+            minLength={10}
+            maxLength={72}
             required
           />
 

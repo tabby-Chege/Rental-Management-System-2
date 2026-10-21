@@ -1,4 +1,3 @@
-import math
 from datetime import date
 
 from flask import Blueprint, request
@@ -9,7 +8,11 @@ from server.extensions import db
 from server.models import Payment, Property, User
 from server.models_tenant import Tenant
 from server.models_unit_lease import LEASE_STATUSES, Lease, Unit
+from server.money import parse_money
+from server.occupancy import unit_occupancy
 from server.pagination import get_pagination, pagination_metadata
+from server.payment_service import add_lease_financial_records
+from server.models_payment import RentSchedule
 
 leases_bp = Blueprint("leases_bp", __name__, url_prefix="/api/leases")
 MANAGER_ROLES = {"landlord", "admin"}
@@ -45,16 +48,9 @@ def tenant_for_property_owner(tenant_id, owner_id):
     return Tenant.query.filter_by(id=tenant_id, landlord_id=owner_id).first()
 
 
-def valid_amount(value, field, *, allow_zero=False):
-    if (
-        isinstance(value, bool)
-        or not isinstance(value, (int, float))
-        or not math.isfinite(value)
-        or value < 0
-        or (not allow_zero and value == 0)
-    ):
-        return f"{field} must be a valid {'non-negative' if allow_zero else 'positive'} amount"
-    return None
+def valid_amount(value, field, currency, *, allow_zero=False):
+    _, error = parse_money(value, currency, allow_zero=allow_zero)
+    return f"{field}: {error.lower()}" if error else None
 
 
 def lease_json(lease):
@@ -161,7 +157,7 @@ def get_lease(lease_id):
     return {"lease": lease_json(lease)}, 200
 
 
-def validate_lease_payload(data, *, partial=False):
+def validate_lease_payload(data, *, partial=False, currency="KES"):
     if not isinstance(data, dict) or (partial and not data):
         return None, "Request body must be a JSON object with lease fields"
     allowed = {
@@ -196,10 +192,13 @@ def validate_lease_payload(data, *, partial=False):
     for field in MONEY_FIELDS:
         if field in cleaned:
             message = valid_amount(
-                cleaned[field], field, allow_zero=(field == "deposit")
+                cleaned[field], field, currency, allow_zero=(field == "deposit")
             )
             if message:
                 return None, message
+            cleaned[field] = parse_money(
+                cleaned[field], currency, allow_zero=(field == "deposit")
+            )[0]
     if "status" in cleaned and cleaned["status"] not in LEASE_STATUSES:
         return None, "status must be active, ended, or terminated"
     if not partial:
@@ -246,8 +245,13 @@ def create_lease():
     if not unit:
         return {"error": "Unit not found"}, 404
     prop = db.session.get(Property, unit.property_id)
+    occupancy = unit_occupancy([unit.id])[unit.id]
+    if occupancy["is_reserved"]:
+        return {
+            "error": "Confirm the reservation payment before creating a lease"
+        }, 409
     payload = {key: value for key, value in data.items() if key != "unit_id"}
-    cleaned, error = validate_lease_payload(payload)
+    cleaned, error = validate_lease_payload(payload, currency=prop.currency)
     if error:
         return {"error": error}, 400
     tenant = tenant_for_property_owner(cleaned["tenant_id"], prop.owner_id)
@@ -261,6 +265,8 @@ def create_lease():
     lease = Lease(unit_id=unit.id, **cleaned)
     db.session.add(lease)
     try:
+        db.session.flush()
+        add_lease_financial_records(lease)
         db.session.commit()
     except IntegrityError:
         db.session.rollback()
@@ -280,7 +286,11 @@ def update_lease(lease_id):
     lease = accessible_leases_query(user).filter(Lease.id == lease_id).first()
     if not lease:
         return {"error": "Lease not found"}, 404
-    cleaned, error = validate_lease_payload(request.get_json(silent=True), partial=True)
+    cleaned, error = validate_lease_payload(
+        request.get_json(silent=True),
+        partial=True,
+        currency=lease.unit.property.currency,
+    )
     if error:
         return {"error": error}, 400
 
@@ -302,6 +312,12 @@ def update_lease(lease_id):
 
     for field, value in cleaned.items():
         setattr(lease, field, value)
+    if status == "active":
+        add_lease_financial_records(lease)
+    else:
+        schedule = RentSchedule.query.filter_by(lease_id=lease.id).first()
+        if schedule:
+            schedule.active = False
     try:
         db.session.commit()
     except IntegrityError:
