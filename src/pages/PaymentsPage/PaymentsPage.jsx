@@ -58,6 +58,9 @@ function PaymentsPage() {
     note: "",
   });
   const [returnedAttempt, setReturnedAttempt] = useState(null);
+  const [paymentFormOpen, setPaymentFormOpen] = useState(false);
+  const [depositFormOpen, setDepositFormOpen] = useState(false);
+  const [depositSaving, setDepositSaving] = useState(false);
 
   const [form, setForm] = useState(INITIAL_FORM);
   const [isSaving, setIsSaving] = useState(false);
@@ -248,6 +251,7 @@ function PaymentsPage() {
       setPage(1);
       setRetryCount((count) => count + 1);
       setSuccessMessage("Payment recorded successfully.");
+      setPaymentFormOpen(false);
     } catch (requestError) {
       setFormError(
         requestError.message || "Could not record the payment."
@@ -283,17 +287,27 @@ function PaymentsPage() {
       setFormError("Select a lease and enter a positive deposit amount.");
       return;
     }
+    setDepositSaving(true);
     try {
       await createDepositLedgerEntry({
         ...depositForm,
         lease_id: Number(depositForm.lease_id),
         amount: Number(depositForm.amount),
       });
-      setDepositLedger(await getDepositLedger());
+      setDepositFormOpen(false);
       setDepositForm((current) => ({ ...current, amount: "", note: "" }));
+      setSuccessMessage("Deposit ledger entry saved.");
+      try {
+        setDepositLedger(await getDepositLedger());
+      } catch (requestError) {
+        setFormError(`Deposit entry saved, but the ledger could not be refreshed: ${requestError.message}`);
+        return;
+      }
       setSuccessMessage("Deposit ledger updated.");
     } catch (requestError) {
       setFormError(requestError.message || "Could not update the deposit ledger.");
+    } finally {
+      setDepositSaving(false);
     }
   }
 
@@ -412,8 +426,25 @@ function PaymentsPage() {
         </section>
       )}
       {canRecord && leases.length > 0 && (
-        <section className="manage-card" aria-label="Manage deposit ledger">
+        <section className="manage-card payment-entry-card" aria-label="Manage deposit ledger">
           <h2>Record deposit charge or refund</h2>
+          <button type="button" className="manage-button is-secondary" onClick={() => {
+            setFormError("");
+            setSuccessMessage("");
+            setDepositFormOpen(true);
+          }}>
+            Add ledger entry
+          </button>
+          {depositFormOpen && (
+          <div className="manage-dialog-backdrop">
+          <section className="manage-dialog" role="dialog" aria-modal="true" aria-labelledby="deposit-entry-dialog-title">
+          <div className="manage-dialog-heading">
+            <div>
+              <h2 id="deposit-entry-dialog-title">Record deposit charge or refund</h2>
+              <p>Choose a lease and enter the deposit ledger adjustment.</p>
+            </div>
+            <button type="button" className="manage-dialog-close" aria-label="Close deposit form" disabled={depositSaving} onClick={() => setDepositFormOpen(false)}>×</button>
+          </div>
           <form className="manage-form" onSubmit={recordDepositEntry}>
             <label className="manage-field">
               Lease
@@ -471,14 +502,33 @@ function PaymentsPage() {
                 }))}
               />
             </label>
-            <button className="manage-button" type="submit">Save ledger entry</button>
+            <div className="manage-actions">
+              <button className="manage-button" type="submit" disabled={depositSaving}>
+                {depositSaving ? "Saving…" : "Save ledger entry"}
+              </button>
+              <button type="button" className="manage-button is-secondary" disabled={depositSaving} onClick={() => setDepositFormOpen(false)}>
+                Cancel
+              </button>
+            </div>
           </form>
+          </section>
+          </div>
+          )}
         </section>
       )}
 
       {canRecord && (
         <div className="manage-card">
           <h2>Record a payment</h2>
+          {!leasesLoading && !leaseError && leases.length > 0 && (
+            <button type="button" className="manage-button" onClick={() => {
+              setFormError("");
+              setSuccessMessage("");
+              setPaymentFormOpen(true);
+            }}>
+              Record payment
+            </button>
+          )}
 
           {leasesLoading && (
             <p className="manage-status" role="status">
@@ -499,7 +549,16 @@ function PaymentsPage() {
             </p>
           )}
 
-          {!leasesLoading && !leaseError && leases.length > 0 && (
+          {!leasesLoading && !leaseError && leases.length > 0 && paymentFormOpen && (
+            <div className="manage-dialog-backdrop">
+            <section className="manage-dialog" role="dialog" aria-modal="true" aria-labelledby="record-payment-dialog-title">
+            <div className="manage-dialog-heading">
+              <div>
+                <h2 id="record-payment-dialog-title">Record a payment</h2>
+                <p>Record a received payment against the correct lease.</p>
+              </div>
+              <button type="button" className="manage-dialog-close" aria-label="Close payment form" disabled={isSaving} onClick={() => setPaymentFormOpen(false)}>×</button>
+            </div>
             <form className="manage-form" onSubmit={handleSubmit}>
               <label className="manage-field">
                 Lease
@@ -592,8 +651,13 @@ function PaymentsPage() {
                 >
                   {isSaving ? "Saving payment…" : "Record payment"}
                 </button>
+                <button type="button" className="manage-button is-secondary" disabled={isSaving} onClick={() => setPaymentFormOpen(false)}>
+                  Cancel
+                </button>
               </div>
             </form>
+            </section>
+            </div>
           )}
 
           {leasesLoading && formError && (

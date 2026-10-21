@@ -5,6 +5,7 @@ from server.extensions import db
 from server.models import Payment
 from server.models_application import Application
 from server.models_payment import (
+    EmailOutbox,
     PaymentAttempt,
     PaymentAllocation,
     RentInvoice,
@@ -37,6 +38,22 @@ def test_rent_schedule_processor_backfills_existing_active_leases(client, world)
     assert result["invoices_created"] == 1
     assert schedule.due_day == lease.start_date.day
     assert invoice.due_date == lease.start_date
+
+
+def test_rent_reminders_are_sent_to_tenant_and_landlord_once(client, world):
+    lease_id = make_lease(client, world)
+    lease = db.session.get(Lease, lease_id)
+
+    process_rent_schedules(today=lease.start_date)
+    messages = EmailOutbox.query.order_by(EmailOutbox.id).all()
+
+    assert {message.recipient for message in messages} == {
+        "tom@x.com",
+        "lana@x.com",
+    }
+    count = len(messages)
+    process_rent_schedules(today=lease.start_date)
+    assert EmailOutbox.query.count() == count
 
 
 def enable_stripe(client):

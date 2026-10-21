@@ -17,7 +17,7 @@ from server.models_tenant import Tenant, TenantProfile
 
 @pytest.fixture
 def client():
-    app = create_app()
+    app = create_app({"REQUIRE_TWO_FACTOR": False})
     with app.app_context():
         db.drop_all()
         db.create_all()

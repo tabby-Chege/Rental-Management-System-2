@@ -1,14 +1,18 @@
 import calendar
+import base64
+import hashlib
+import hmac
 import smtplib
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from email.message import EmailMessage
 
+from cryptography.fernet import Fernet
 from flask import current_app
 from sqlalchemy import or_
 
 from server.extensions import db
-from server.models import Payment, User
+from server.models import Payment, Property, User
 from server.models_application import Application
 from server.models_payment import (
     DepositLedgerEntry,
@@ -28,7 +32,28 @@ def utc_now():
     return datetime.now(timezone.utc)
 
 
-def queue_email(event_key, recipient, subject, body):
+def mfa_email_cipher():
+    secret = current_app.config["JWT_SECRET_KEY"].encode("utf-8")
+    key = hmac.new(
+        secret,
+        b"property-finder-mfa-email-outbox-v1",
+        hashlib.sha256,
+    ).digest()
+    return Fernet(base64.urlsafe_b64encode(key))
+
+
+def encrypt_mfa_email_body(body):
+    return "fernet-v1:" + mfa_email_cipher().encrypt(body.encode("utf-8")).decode("ascii")
+
+
+def decrypt_mfa_email_body(body):
+    prefix = "fernet-v1:"
+    if not body.startswith(prefix):
+        return body
+    return mfa_email_cipher().decrypt(body[len(prefix):].encode("ascii")).decode("utf-8")
+
+
+def queue_email(event_key, recipient, subject, body, encrypt_body=False):
     if not recipient:
         return None
     existing = EmailOutbox.query.filter_by(event_key=event_key).first()
@@ -38,7 +63,7 @@ def queue_email(event_key, recipient, subject, body):
         event_key=event_key,
         recipient=recipient,
         subject=subject,
-        body=body,
+        body=encrypt_mfa_email_body(body) if encrypt_body else body,
     )
     db.session.add(message)
     return message
@@ -149,6 +174,13 @@ def process_rent_schedules(today=None):
                 .first()
             )
             user = db.session.get(User, tenant.user_id) if tenant else None
+            unit = db.session.get(Unit, lease.unit_id) if lease else None
+            property_record = db.session.get(Property, unit.property_id) if unit else None
+            landlord = (
+                db.session.get(User, property_record.owner_id)
+                if property_record
+                else None
+            )
             days_until_due = (due_date - current_date).days
             if days_until_due <= 5 and invoice.balance > 0:
                 event_type = "overdue" if days_until_due < 0 else "due"
@@ -168,6 +200,26 @@ def process_rent_schedules(today=None):
                     event_key, user.email if user else None, subject, body
                 )
                 if notification and notification.id is None:
+                    reminders_queued += 1
+                landlord_notification = queue_email(
+                    f"rent-invoice:{invoice.id}:landlord:{event_type}",
+                    landlord.email if landlord else None,
+                    (
+                        f"Tenant rent overdue for {property_record.name}"
+                        if event_type == "overdue" and property_record
+                        else f"Rent due soon for {property_record.name}"
+                        if property_record
+                        else f"Rent reminder for lease {schedule.lease_id}"
+                    ),
+                    (
+                        f"Rent balance {invoice.currency} {invoice.balance} for "
+                        f"{property_record.name if property_record else 'your property'}, "
+                        f"unit {unit.unit_number if unit else 'unknown'} is "
+                        f"{'overdue' if event_type == 'overdue' else 'due'} "
+                        f"on {due_date.isoformat()}."
+                    ),
+                )
+                if landlord_notification and landlord_notification.id is None:
                     reminders_queued += 1
 
             schedule.next_due_date = _add_month(due_date, schedule.due_day)
@@ -195,6 +247,30 @@ def process_rent_schedules(today=None):
             ),
         )
         if notification and notification.id is None:
+            reminders_queued += 1
+        unit = db.session.get(Unit, lease.unit_id) if lease else None
+        property_record = db.session.get(Property, unit.property_id) if unit else None
+        landlord = (
+            db.session.get(User, property_record.owner_id)
+            if property_record
+            else None
+        )
+        landlord_notification = queue_email(
+            f"rent-invoice:{invoice.id}:landlord:overdue",
+            landlord.email if landlord else None,
+            (
+                f"Tenant rent overdue for {property_record.name}"
+                if property_record
+                else f"Rent overdue for lease {invoice.lease_id}"
+            ),
+            (
+                f"Rent balance {invoice.currency} {invoice.balance} for "
+                f"{property_record.name if property_record else 'your property'}, "
+                f"unit {unit.unit_number if unit else 'unknown'} was due "
+                f"on {invoice.due_date.isoformat()}."
+            ),
+        )
+        if landlord_notification and landlord_notification.id is None:
             reminders_queued += 1
 
     if invoices_created or reminders_queued or schedules_updated:
@@ -522,6 +598,8 @@ def process_email_outbox(limit=50):
         for message in messages:
             message.status = "sent"
             message.sent_at = utc_now()
+            if message.event_key.startswith("mfa-code:"):
+                message.body = "[redacted after delivery]"
         db.session.commit()
         return {"sent": len(messages), "failed": 0}
 
@@ -537,7 +615,8 @@ def process_email_outbox(limit=50):
         email["From"] = sender
         email["To"] = record.recipient
         email["Subject"] = record.subject
-        email.set_content(record.body)
+        body = decrypt_mfa_email_body(record.body)
+        email.set_content(body)
         try:
             with smtplib.SMTP(
                 host, current_app.config["SMTP_PORT"], timeout=20
@@ -558,6 +637,8 @@ def process_email_outbox(limit=50):
         record.attempts += 1
         record.sent_at = utc_now()
         record.last_error = None
+        if record.event_key.startswith("mfa-code:"):
+            record.body = "[redacted after delivery]"
         sent += 1
     db.session.commit()
     return {"sent": sent, "failed": failed}

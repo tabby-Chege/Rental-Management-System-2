@@ -166,6 +166,8 @@ function LeasesPage() {
   const [tenants, setTenants] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState("");
+  const [createOpen, setCreateOpen] = useState(Boolean(searchParams.get("unit_id")));
+  const [notice, setNotice] = useState("");
   const [editingId, setEditingId] = useState(null);
   const initialForm = {
     ...EMPTY_FORM,
@@ -212,6 +214,8 @@ function LeasesPage() {
   async function handleCreate(body) {
     const created = await createLease(body);
     setLeases((current) => [created, ...current]);
+    setCreateOpen(false);
+    setNotice("Lease created and added to your lease list.");
   }
 
   async function handleUpdate(id, body) {
@@ -240,58 +244,96 @@ function LeasesPage() {
     }
   }
 
+  const editingLease = leases.find((lease) => lease.id === editingId);
   const canAdd = units.length > 0 && tenants.length > 0;
 
   return (
     <section className="manage-page">
-      <h1>Leases</h1>
-
-      <div className="manage-card">
-        <h2>Add a lease</h2>
-        {isLoading && <p className="manage-status">Loading…</p>}
-        {!isLoading && units.length === 0 && (
-          <p className="manage-status">Add a unit first on the Units page.</p>
-        )}
-        {!isLoading && tenants.length === 0 && (
-          <p className="manage-status">Add a tenant first on the Tenants page.</p>
-        )}
+      <header className="manage-page-heading">
+        <div>
+          <h1>Leases</h1>
+          <p className="manage-status">Review current rental agreements and keep lease terms up to date.</p>
+        </div>
         {!isLoading && canAdd && (
-          <LeaseForm
-            key={searchParams.toString()}
-            initial={initialForm}
-            units={units}
-            properties={properties}
-            tenants={tenants}
-            submitLabel="Add lease"
-            onSubmit={handleCreate}
-          />
+          <button type="button" className="manage-button" onClick={() => {
+            setError("");
+            setNotice("");
+            setCreateOpen(true);
+          }}>
+            Add lease
+          </button>
         )}
-      </div>
+      </header>
+
+      {isLoading && <p className="manage-status">Loading…</p>}
+      {!isLoading && units.length === 0 && (
+        <p className="manage-status">Add a unit first on the Units page.</p>
+      )}
+      {!isLoading && units.length > 0 && tenants.length === 0 && (
+        <p className="manage-status">A tenant must apply for a property before a lease can be created.</p>
+      )}
+
+      {createOpen && canAdd && (
+        <div className="manage-dialog-backdrop">
+          <section className="manage-dialog" role="dialog" aria-modal="true" aria-labelledby="lease-dialog-title">
+            <div className="manage-dialog-heading">
+              <div>
+                <h2 id="lease-dialog-title">Add a lease</h2>
+                <p>Choose a unit and tenant, then enter the agreement terms.</p>
+              </div>
+              <button type="button" className="manage-dialog-close" aria-label="Close lease form" onClick={() => setCreateOpen(false)}>×</button>
+            </div>
+            <LeaseForm
+              key={searchParams.toString()}
+              initial={initialForm}
+              units={units}
+              properties={properties}
+              tenants={tenants}
+              submitLabel="Add lease"
+              onSubmit={handleCreate}
+              onCancel={() => setCreateOpen(false)}
+            />
+          </section>
+        </div>
+      )}
 
       {error && (
         <p className="manage-error" role="alert">
           {error}
         </p>
       )}
+      {notice && <p className="manage-status" role="status">{notice}</p>}
       {!isLoading && leases.length === 0 && !error && (
         <p className="manage-status">No leases yet.</p>
+      )}
+
+      {editingLease && (
+        <div className="manage-dialog-backdrop">
+          <section className="manage-dialog" role="dialog" aria-modal="true" aria-labelledby="edit-lease-dialog-title">
+            <div className="manage-dialog-heading">
+              <div>
+                <h2 id="edit-lease-dialog-title">Edit lease</h2>
+                <p>Update the tenant and agreement terms for this lease.</p>
+              </div>
+              <button type="button" className="manage-dialog-close" aria-label="Close lease editor" onClick={() => setEditingId(null)}>×</button>
+            </div>
+            <LeaseForm
+              initial={leaseToForm(editingLease)}
+              units={units}
+              properties={properties}
+              tenants={tenants}
+              isEdit
+              submitLabel="Save changes"
+              onSubmit={(body) => handleUpdate(editingLease.id, body)}
+              onCancel={() => setEditingId(null)}
+            />
+          </section>
+        </div>
       )}
 
       <ul className="manage-list">
         {leases.map((lease) => (
           <li key={lease.id} className="manage-card">
-            {editingId === lease.id ? (
-              <LeaseForm
-                initial={leaseToForm(lease)}
-                units={units}
-                properties={properties}
-                tenants={tenants}
-                isEdit
-                submitLabel="Save changes"
-                onSubmit={(body) => handleUpdate(lease.id, body)}
-                onCancel={() => setEditingId(null)}
-              />
-            ) : (
               <>
                 <div>
                   <strong>{unitLabel(lease.unit_id)}</strong>
@@ -332,7 +374,6 @@ function LeasesPage() {
                   </button>
                 </div>
               </>
-            )}
           </li>
         ))}
       </ul>

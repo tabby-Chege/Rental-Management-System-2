@@ -1,5 +1,20 @@
 import { authenticatedFetch } from "./authAPI.js";
 
+const PROFILE_FIELDS = [
+  "full_name",
+  "phone",
+  "employment_status",
+  "employer",
+  "job_title",
+  "emergency_contact_name",
+  "emergency_contact_phone",
+  "emergency_contact_relationship",
+  "id_type",
+  "id_number",
+  "previous_landlord_name",
+  "previous_landlord_contact",
+];
+
 async function parseResponse(response) {
   let data = {};
   try {
@@ -23,10 +38,15 @@ export async function getMyTenantProfile() {
 }
 
 export async function updateMyTenantProfile(values) {
+  const profileValues = Object.fromEntries(
+    PROFILE_FIELDS
+      .filter((field) => Object.hasOwn(values, field))
+      .map((field) => [field, values[field]]),
+  );
   const response = await authenticatedFetch("/api/tenant-profile/me", {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(values),
+    body: JSON.stringify(profileValues),
   });
   return parseResponse(response);
 }

@@ -138,7 +138,13 @@ def test_document_upload_rejects_unsupported_files(client, world):
     assert response.status_code == 400
 
 
-def test_document_upload_reports_missing_private_storage(client, world):
+def test_document_upload_uses_local_private_storage_when_configured(
+    client, world, tmp_path
+):
+    client.application.config.update(
+        OBJECT_STORAGE_BACKEND="local",
+        LOCAL_STORAGE_PATH=str(tmp_path),
+    )
     image_bytes = BytesIO()
     Image.new("RGB", (8, 8), color="green").save(image_bytes, format="PNG")
     response = client.post(
@@ -150,5 +156,15 @@ def test_document_upload_reports_missing_private_storage(client, world):
         },
         content_type="multipart/form-data",
     )
-    assert response.status_code == 503
-    assert response.get_json()["error"] == "Private document storage is unavailable"
+    assert response.status_code == 201
+    document = response.get_json()["document"]
+    stored_document = db.session.get(TenantDocument, document["id"])
+    stored_object = tmp_path / stored_document.object_key
+    assert stored_object.is_file()
+
+    downloaded = client.get(
+        document["download_url"],
+        headers=world["tenant"],
+    )
+    assert downloaded.status_code == 200
+    assert downloaded.data == stored_object.read_bytes()

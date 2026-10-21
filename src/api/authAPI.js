@@ -73,13 +73,19 @@ async function authRequest(
   endpoint,
   values = {},
   requiresToken = false,
+  method,
 ) {
   let response;
   try {
+    const requestMethod = method || (
+      endpoint === "/me" || endpoint === "/two-factor/methods" ? "GET" : "POST"
+    );
     const options = {
-      method: endpoint === "/me" ? "GET" : "POST",
+      method: requestMethod,
       headers: { "Content-Type": "application/json" },
-      ...(endpoint === "/me" ? {} : { body: JSON.stringify(values) }),
+      ...(requestMethod === "GET"
+        ? {}
+        : { body: JSON.stringify(values) }),
     };
     response = requiresToken
       ? await authenticatedFetch(`${API_URL}${endpoint}`, options)
@@ -115,10 +121,137 @@ export async function registerUser(values) {
 export async function loginUser(values) {
   const data = await authRequest("/login", values);
 
-  if (!data.access_token || !data.refresh_token) {
+  if (data.access_token && data.refresh_token) {
+    saveTokens(data.access_token, data.refresh_token);
+    return data;
+  }
+  if (!data.mfa_required && !data.mfa_setup_required) {
     throw new Error("Login response did not include authentication tokens.");
   }
+  return data;
+}
 
+export async function loginWithGoogle(credential, role) {
+  const data = await authRequest("/google-login", {
+    credential,
+    ...(role ? { role } : {}),
+  });
+  if (data.access_token && data.refresh_token) {
+    saveTokens(data.access_token, data.refresh_token);
+  } else if (
+    !data.role_required &&
+    !data.mfa_required &&
+    !data.mfa_setup_required
+  ) {
+    throw new Error("Google sign-in response did not include authentication details.");
+  }
+  return data;
+}
+
+export async function beginTwoFactorSetup(challengeToken) {
+  return authRequest("/two-factor/setup", { challenge_token: challengeToken });
+}
+
+export async function completeTwoFactor(challengeToken, code, setup = false) {
+  const endpoint = setup ? "/two-factor/confirm" : "/two-factor/verify";
+  const data = await authRequest(endpoint, {
+    challenge_token: challengeToken,
+    code,
+  });
+  if (!data.access_token || !data.refresh_token) {
+    throw new Error("Two-factor verification did not return an authenticated session.");
+  }
+  saveTokens(data.access_token, data.refresh_token);
+  return data;
+}
+
+export function sendLoginFactorCode(challengeToken, method) {
+  return authRequest("/two-factor/code/send", {
+    challenge_token: challengeToken,
+    method,
+  });
+}
+
+export async function verifyLoginFactorCode(challengeToken, method, code) {
+  const data = await authRequest("/two-factor/code/verify", {
+    challenge_token: challengeToken,
+    method,
+    code,
+  });
+  if (!data.access_token || !data.refresh_token) {
+    throw new Error("Verification did not return an authenticated session.");
+  }
+  saveTokens(data.access_token, data.refresh_token);
+  return data;
+}
+
+export async function verifyRecoveryCode(challengeToken, code) {
+  const data = await authRequest("/recovery-codes/verify", {
+    challenge_token: challengeToken,
+    code,
+  });
+  if (!data.access_token || !data.refresh_token) {
+    throw new Error("Recovery verification did not return an authenticated session.");
+  }
+  saveTokens(data.access_token, data.refresh_token);
+  return data;
+}
+
+export function getFactorMethods() {
+  return authRequest("/two-factor/methods", {}, true);
+}
+
+export function requestPhoneVerification(phone) {
+  return authRequest("/two-factor/phone/send", { phone }, true);
+}
+
+export function verifyPhoneNumber(challengeToken, code) {
+  return authRequest(
+    "/two-factor/phone/verify",
+    { challenge_token: challengeToken, code },
+    true,
+  );
+}
+
+export function generateRecoveryCodes() {
+  return authRequest("/recovery-codes", {}, true);
+}
+
+export function beginPasskeyRegistration() {
+  return authRequest("/passkeys/registration/options", {}, true);
+}
+
+export function completePasskeyRegistration(challengeToken, credential, name) {
+  return authRequest(
+    "/passkeys/registration/complete",
+    { challenge_token: challengeToken, credential, name },
+    true,
+  );
+}
+
+export function removePasskey(id) {
+  return authRequest(`/passkeys/${id}`, {}, true, "DELETE");
+}
+
+export function beginPasskeyAuthentication(challengeToken) {
+  return authRequest("/passkeys/authentication/options", {
+    challenge_token: challengeToken,
+  });
+}
+
+export async function completePasskeyAuthentication(
+  loginChallengeToken,
+  passkeyChallengeToken,
+  credential,
+) {
+  const data = await authRequest("/passkeys/authentication/complete", {
+    login_challenge_token: loginChallengeToken,
+    passkey_challenge_token: passkeyChallengeToken,
+    credential,
+  });
+  if (!data.access_token || !data.refresh_token) {
+    throw new Error("Passkey verification did not return an authenticated session.");
+  }
   saveTokens(data.access_token, data.refresh_token);
   return data;
 }

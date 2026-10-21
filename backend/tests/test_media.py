@@ -76,6 +76,34 @@ def test_property_photo_upload_is_normalized_served_and_cover_can_change(
     assert served.headers["X-Content-Type-Options"] == "nosniff"
 
 
+def test_property_photo_upload_works_with_local_object_storage(
+    client, world, tmp_path
+):
+    client.application.config.update(
+        OBJECT_STORAGE_BACKEND="local",
+        LOCAL_STORAGE_PATH=str(tmp_path),
+    )
+    unit_id = create_unit(client, world["landlord"])
+    unit = db.session.get(Unit, unit_id)
+
+    uploaded = upload(
+        client,
+        f"/api/properties/{unit.property_id}/photos",
+        headers=world["landlord"],
+    )
+
+    assert uploaded.status_code == 201
+    photo = uploaded.get_json()["photo"]
+    stored_photo = db.session.get(PropertyPhoto, photo["id"])
+    stored_object = tmp_path / stored_photo.object_key
+    assert stored_object.is_file()
+
+    served = client.get(photo["url"])
+    assert served.status_code == 200
+    assert served.mimetype == "image/png"
+    assert served.data == stored_object.read_bytes()
+
+
 def test_photo_upload_rejects_disallowed_extensions_and_fake_images(client, world):
     unit_id = create_unit(client, world["landlord"])
     unit = db.session.get(Unit, unit_id)

@@ -4,6 +4,7 @@ from datetime import date, timedelta
 from flask_jwt_extended import create_access_token
 
 from server.extensions import db
+from server.models_media import PropertyPhoto
 from server.models_tenant import Tenant
 from server.models_unit_lease import Lease
 from tests.test_tenants import client, world  # noqa: F401
@@ -321,6 +322,45 @@ def test_public_unit_search_filters_real_units_and_excludes_occupied_by_default(
         "/api/units/public?min_rent=20000&max_rent=10000"
     ).status_code == 400
     assert client.get("/api/units/public?bedrooms=-1").status_code == 400
+
+
+def test_public_unit_search_includes_cover_photo_url(client, world):
+    property_id = create_property(
+        client, world["landlord"], "Photo listing"
+    ).get_json()["property"]["id"]
+    created_unit = client.post(
+        f"/api/properties/{property_id}/units",
+        headers=world["landlord"],
+        json={"unit_number": "A1", "bedrooms": 1},
+    )
+    assert created_unit.status_code == 201
+    unit_id = created_unit.get_json()["id"]
+    db.session.add(
+        PropertyPhoto(
+            property_id=property_id,
+            object_key="property-cover-test",
+            content_type="image/jpeg",
+            file_size=1200,
+            is_cover=True,
+        )
+    )
+    db.session.add(
+        PropertyPhoto(
+            unit_id=unit_id,
+            object_key="unit-cover-test",
+            content_type="image/jpeg",
+            file_size=1800,
+            is_cover=True,
+        )
+    )
+    db.session.commit()
+
+    response = client.get("/api/units/public")
+
+    assert response.status_code == 200
+    unit = next(item for item in response.get_json()["units"] if item["id"] == unit_id)
+    unit_photo = PropertyPhoto.query.filter_by(unit_id=unit_id).one()
+    assert unit["photo_url"] == f"/api/public/photos/{unit_photo.id}"
 
 
 def test_public_property_cards_include_available_bedroom_layouts(client, world):

@@ -9,6 +9,7 @@ from sqlalchemy import exists, or_
 
 from server.extensions import db
 from server.models import Property, User
+from server.models_communications import PropertyConversation
 from server.models_application import Application, RESERVED_APPLICATION_STATUSES
 from server.models_unit_lease import Lease, Unit
 from server.money import currency_precision, parse_money
@@ -631,6 +632,10 @@ def delete_property(property_id):
     if Unit.query.filter_by(property_id=prop.id).first():
         return {
             "error": "Delete or move this property's units before deleting the property"
+        }, 409
+    if PropertyConversation.query.filter_by(property_id=prop.id).first():
+        return {
+            "error": "This property has message history and cannot be deleted"
         }, 409
 
     db.session.delete(prop)

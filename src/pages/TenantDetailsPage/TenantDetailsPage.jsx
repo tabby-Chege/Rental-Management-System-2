@@ -10,6 +10,7 @@ import {
 } from "../../api/tenantProfilesApi";
 import { formatMoney } from "../../utils/money";
 import "../manage.css";
+import "./TenantDetailsPage.css";
 
 const EMPTY_PROFILE = {
   full_name: "",
@@ -25,6 +26,12 @@ const EMPTY_PROFILE = {
   previous_landlord_name: "",
   previous_landlord_contact: "",
 };
+
+function profileToForm(profile = {}) {
+  return Object.fromEntries(
+    Object.keys(EMPTY_PROFILE).map((field) => [field, profile[field] ?? ""]),
+  );
+}
 
 function TenantDetailsPage() {
   const [profile, setProfile] = useState(null);
@@ -52,7 +59,7 @@ function TenantDetailsPage() {
         setProfile(profileResult.profile);
         setDocuments(profileResult.documents ?? []);
         if (profileResult.profile) {
-          setForm({ ...EMPTY_PROFILE, ...profileResult.profile });
+          setForm(profileToForm(profileResult.profile));
         }
         setResidences(tenantResult?.current_residences ?? []);
       } catch (requestError) {
@@ -76,7 +83,7 @@ function TenantDetailsPage() {
       const result = await updateMyTenantProfile(form);
       setProfile(result.profile);
       setDocuments(result.documents ?? []);
-      setForm({ ...EMPTY_PROFILE, ...result.profile });
+      setForm(profileToForm(result.profile));
       setNotice("Your profile has been saved.");
     } catch (requestError) {
       setError(requestError.message);
@@ -135,18 +142,69 @@ function TenantDetailsPage() {
     setForm((current) => ({ ...current, [name]: value }));
   }
 
+  const requiredProfileFields = [
+    "full_name",
+    "phone",
+    "employment_status",
+    "emergency_contact_name",
+    "emergency_contact_phone",
+    "emergency_contact_relationship",
+  ];
+  const profileCompletion = Math.round(
+    (requiredProfileFields.filter((field) => String(form[field] ?? "").trim()).length /
+      requiredProfileFields.length) *
+      100,
+  );
+
   return (
-    <section className="manage-page">
-      <h1>My profile</h1>
-      <p className="manage-status">
-        Keep your application information up to date. A submitted application
-        keeps a private snapshot of the details you provided at that time.
-      </p>
+    <section className="manage-page tenant-details-page">
+      <header className="tenant-page-hero">
+        <div className="tenant-page-hero-copy">
+          <p className="tenant-page-eyebrow">TENANT WORKSPACE</p>
+          <h1>Your profile</h1>
+          <p>
+            Keep your application details current. Each application privately
+            saves a snapshot of the information you submit.
+          </p>
+          <div className="tenant-page-links">
+            <Link to="/tenant/applications">View my applications</Link>
+            <Link to="/properties">Explore properties</Link>
+          </div>
+        </div>
+        <div className="tenant-profile-progress">
+          <div>
+            <span>Profile completion</span>
+            <strong>{profileCompletion}%</strong>
+          </div>
+          <div
+            className="tenant-progress-track"
+            role="progressbar"
+            aria-label="Profile completion"
+            aria-valuemin="0"
+            aria-valuemax="100"
+            aria-valuenow={profileCompletion}
+          >
+            <span style={{ width: `${profileCompletion}%` }} />
+          </div>
+          <p>{profileCompletion === 100 ? "Your key details are ready for applications." : "Complete your key details to make applying easier."}</p>
+        </div>
+      </header>
       {loading && <p className="manage-status">Loading your profile…</p>}
       {!loading && (
         <>
-          <form className="manage-form manage-card" onSubmit={handleSubmit}>
-            <h2>Personal details</h2>
+          {error && <p className="manage-error tenant-profile-alert" role="alert">{error}</p>}
+          {notice && <p className="tenant-profile-notice" role="status">{notice}</p>}
+          <div className="tenant-details-grid">
+          <form className="manage-form manage-card tenant-profile-form" onSubmit={handleSubmit}>
+            <div className="tenant-form-heading">
+              <div>
+                <p className="tenant-page-eyebrow">APPLICATION PROFILE</p>
+                <h2>Personal information</h2>
+              </div>
+              <span className={`tenant-profile-badge${profile ? " is-saved" : ""}`}>
+                {profile ? "Profile saved" : "Not yet saved"}
+              </span>
+            </div>
             <label className="manage-field">
               <span>Full name</span>
               <input name="full_name" value={form.full_name} maxLength={120} required onChange={updateField} />
@@ -187,12 +245,44 @@ function TenantDetailsPage() {
             <h2>Identity</h2>
             <label className="manage-field">
               <span>ID type (optional)</span>
-              <input name="id_type" value={form.id_type ?? ""} maxLength={40} onChange={updateField} />
+              <select name="id_type" value={form.id_type ?? ""} onChange={updateField}>
+                <option value="">Choose ID type</option>
+                <option value="national_id">National ID</option>
+                <option value="passport">Passport</option>
+                <option value="drivers_license">Driver’s license</option>
+                <option value="alien_id">Alien ID / residence permit</option>
+                <option value="other">Other</option>
+                {form.id_type && ![
+                  "national_id",
+                  "passport",
+                  "drivers_license",
+                  "alien_id",
+                  "other",
+                ].includes(form.id_type) && (
+                  <option value={form.id_type}>{form.id_type}</option>
+                )}
+              </select>
             </label>
             <label className="manage-field">
               <span>ID number (encrypted at rest)</span>
               <input name="id_number" value={form.id_number ?? ""} maxLength={120} autoComplete="off" onChange={updateField} />
             </label>
+            <div className="tenant-identity-upload">
+              <div>
+                <strong>Identity photo</strong>
+                <p>Upload a clear photo or scan, or a PDF copy of the ID shown above. Up to 10 MB.</p>
+              </div>
+              <label className="tenant-upload-button">
+                <span>{uploading ? "Uploading…" : "Upload ID photo"}</span>
+                <input
+                  type="file"
+                  accept="application/pdf,image/jpeg,image/png,image/webp"
+                  disabled={!profile || uploading}
+                  onChange={handleUpload}
+                />
+              </label>
+              {!profile && <small>Save your profile before uploading an ID photo.</small>}
+            </div>
 
             <h2>Previous landlord (optional)</h2>
             <label className="manage-field">
@@ -203,8 +293,6 @@ function TenantDetailsPage() {
               <span>Contact details</span>
               <input name="previous_landlord_contact" value={form.previous_landlord_contact ?? ""} maxLength={120} onChange={updateField} />
             </label>
-            {error && <p className="manage-error" role="alert">{error}</p>}
-            {notice && <p role="status">{notice}</p>}
             <div className="manage-actions">
               <button className="manage-button" type="submit" disabled={saving}>
                 {saving ? "Saving…" : profile ? "Save profile" : "Create profile"}
@@ -212,40 +300,41 @@ function TenantDetailsPage() {
             </div>
           </form>
 
-          <section className="manage-card">
-            <h2>Identity documents</h2>
-            <p>PDF, JPEG, PNG, or WebP; maximum 10 MB per file. Documents are private.</p>
-            <label className="manage-field">
-              <span>Upload an identity document</span>
-              <input
-                type="file"
-                accept="application/pdf,image/jpeg,image/png,image/webp"
-                disabled={!profile || uploading}
-                onChange={handleUpload}
-              />
-            </label>
-            {!profile && <p>Save your profile before adding documents.</p>}
-            {uploading && <p className="manage-status">Uploading document…</p>}
-            <ul className="manage-list">
-              {documents.map((document) => (
-                <li className="manage-card" key={document.id}>
-                  <span>{document.kind} · {Math.ceil(document.file_size / 1024)} KB</span>
-                  <div className="manage-actions">
-                    <button className="manage-button" type="button" onClick={() => handleDownload(document)}>
-                      Download
-                    </button>
-                    <button className="manage-button is-danger" type="button" onClick={() => handleDelete(document.id)}>
-                      Delete
-                    </button>
-                  </div>
-                </li>
-              ))}
-            </ul>
+          <aside className="tenant-details-sidebar">
+          <section className="manage-card tenant-side-card">
+            <div className="tenant-side-card-heading">
+              <div>
+                <p className="tenant-page-eyebrow">PRIVATE FILES</p>
+                <h2>Identity documents</h2>
+              </div>
+              <span aria-hidden="true">↥</span>
+            </div>
+            <p>Private files attached to your rental application profile.</p>
+            {documents.length === 0 ? (
+              <p>No identity files uploaded yet.</p>
+            ) : (
+              <ul className="manage-list">
+                {documents.map((document) => (
+                  <li className="manage-card tenant-document-item" key={document.id}>
+                    <span>{document.kind === "identity" ? "Identity document" : document.kind} · {Math.ceil(document.file_size / 1024)} KB</span>
+                    <div className="manage-actions">
+                      <button className="manage-button" type="button" onClick={() => handleDownload(document)}>
+                        Download
+                      </button>
+                      <button className="manage-button is-danger" type="button" onClick={() => handleDelete(document.id)}>
+                        Delete
+                      </button>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            )}
           </section>
 
-          <section className="manage-card tenant-residences">
+          <section className="manage-card tenant-residences tenant-side-card">
             <div>
-              <h2>My current property</h2>
+              <p className="tenant-page-eyebrow">YOUR RENTAL</p>
+              <h2>Current property</h2>
               {residences.length === 0 && (
                 <p>
                   No active lease is linked to your account yet. Once an
@@ -285,6 +374,8 @@ function TenantDetailsPage() {
               </article>
             ))}
           </section>
+          </aside>
+          </div>
         </>
       )}
     </section>

@@ -9,8 +9,17 @@ class User(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(120), nullable=False)
     email = db.Column(db.String(120), unique=True, nullable=False, index=True)
-    password_hash = db.Column(db.String(255), nullable=False)
+    password_hash = db.Column(db.String(255), nullable=True)
     role = db.Column(db.String(20), nullable=False, default="tenant")
+    google_sub = db.Column(db.String(255), unique=True, nullable=True)
+    totp_secret = db.Column(db.Text, nullable=True)
+    totp_pending_secret = db.Column(db.Text, nullable=True)
+    totp_enabled = db.Column(db.Boolean, nullable=False, default=False, server_default="0")
+    totp_last_counter = db.Column(db.Integer, nullable=True)
+    mfa_phone = db.Column(db.String(20), nullable=True)
+    mfa_phone_verified = db.Column(
+        db.Boolean, nullable=False, default=False, server_default="0"
+    )
     failed_login_attempts = db.Column(
         db.Integer, nullable=False, default=0, server_default="0"
     )

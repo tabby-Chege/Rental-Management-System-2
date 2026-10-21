@@ -452,6 +452,8 @@ function UnitsPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState("");
   const [editingId, setEditingId] = useState(null);
+  const [unitFormOpen, setUnitFormOpen] = useState(false);
+  const [unitNotice, setUnitNotice] = useState("");
   const [roomsUnitId, setRoomsUnitId] = useState(null);
   const [showBulkForm, setShowBulkForm] = useState(false);
   const [bulkForm, setBulkForm] = useState({
@@ -517,6 +519,8 @@ function UnitsPage() {
   async function handleCreate(body) {
     const created = await createUnit(body);
     setUnits((current) => [...current, created]);
+    setUnitFormOpen(false);
+    setUnitNotice(`Unit ${created.unit_number} was added to the portfolio.`);
   }
 
   async function handleUpdate(id, body) {
@@ -574,6 +578,7 @@ function UnitsPage() {
       });
       setUnits((current) => [...current, ...created]);
       setBulkMessage(`Created ${created.length} units.`);
+      setShowBulkForm(false);
     } catch (requestError) {
       setBulkError(requestError.message);
     } finally {
@@ -583,34 +588,76 @@ function UnitsPage() {
 
   return (
     <section className="manage-page">
-      <h1>Units</h1>
-
-      <div className="manage-card">
-        <h2>Add a unit</h2>
-        {!isLoading && properties.length === 0 ? (
-          <p className="manage-status">Add a property first, then come back to add its units.</p>
-        ) : selectedProperty?.rental_type === "whole_property" ? (
-          <p className="manage-status">
-            Whole properties have one automatically created unit and cannot have additional units.
-          </p>
-        ) : (
-          <UnitForm
-            initial={{
-              ...EMPTY_FORM,
-              property_id: selectedPropertyId,
-            }}
-            fields={CREATE_FIELDS}
-            properties={properties}
-            onPropertyChange={(propertyId) => {
-              if (propertyId) setSearchParams({ property_id: propertyId });
-              else setSearchParams({});
-            }}
-            submitLabel="Add unit"
-            resetOnSave
-            onSubmit={handleCreate}
-          />
+      <header className="manage-page-heading">
+        <div>
+          <h1>Units</h1>
+          <p className="manage-status">Manage availability, rental details, and room layouts across your properties.</p>
+        </div>
+        {properties.some((property) => property.rental_type !== "whole_property") && (
+          <button type="button" className="manage-button" onClick={() => {
+            setUnitNotice("");
+            setUnitFormOpen(true);
+          }}>
+            Add unit
+          </button>
         )}
-      </div>
+      </header>
+
+      {!isLoading && properties.length === 0 && (
+        <p className="manage-status">Add a property first, then come back to add its units.</p>
+      )}
+      {selectedProperty?.rental_type === "whole_property" && (
+        <p className="manage-status">
+          Whole properties have one automatically created unit and cannot have additional units.
+        </p>
+      )}
+
+      {unitFormOpen && (
+        <div className="manage-dialog-backdrop">
+          <section className="manage-dialog" role="dialog" aria-modal="true" aria-labelledby="unit-dialog-title">
+            <div className="manage-dialog-heading">
+              <div>
+                <h2 id="unit-dialog-title">Add a unit</h2>
+                <p>Set up a rentable unit and its availability details.</p>
+              </div>
+              <button type="button" className="manage-dialog-close" aria-label="Close unit form" onClick={() => setUnitFormOpen(false)}>×</button>
+            </div>
+            <UnitForm
+              initial={{ ...EMPTY_FORM, property_id: selectedPropertyId }}
+              fields={CREATE_FIELDS}
+              properties={properties}
+              onPropertyChange={(propertyId) => {
+                if (propertyId) setSearchParams({ property_id: propertyId });
+                else setSearchParams({});
+              }}
+              submitLabel="Add unit"
+              resetOnSave
+              onSubmit={handleCreate}
+            />
+          </section>
+        </div>
+      )}
+
+      {editingId !== null && units.some((unit) => unit.id === editingId) && (
+        <div className="manage-dialog-backdrop">
+          <section className="manage-dialog" role="dialog" aria-modal="true" aria-labelledby="edit-unit-dialog-title">
+            <div className="manage-dialog-heading">
+              <div>
+                <h2 id="edit-unit-dialog-title">Edit unit</h2>
+                <p>Update the unit details in your portfolio.</p>
+              </div>
+              <button type="button" className="manage-dialog-close" aria-label="Close unit editor" onClick={() => setEditingId(null)}>×</button>
+            </div>
+            <UnitForm
+              initial={unitToForm(units.find((unit) => unit.id === editingId))}
+              fields={EDIT_FIELDS}
+              submitLabel="Save changes"
+              onSubmit={(body) => handleUpdate(editingId, body)}
+              onCancel={() => setEditingId(null)}
+            />
+          </section>
+        </div>
+      )}
 
       {selectedProperty && selectedProperty.rental_type !== "whole_property" && (
         <section className="manage-card bulk-units-card">
@@ -622,14 +669,24 @@ function UnitsPage() {
             type="button"
             className="manage-button is-secondary"
             onClick={() => {
-              setShowBulkForm((show) => !show);
+              setShowBulkForm(true);
               setBulkError("");
               setBulkMessage("");
             }}
           >
-            {showBulkForm ? "Hide bulk form" : "Create units in bulk"}
+            Create units in bulk
           </button>
+          {bulkMessage && <p role="status">{bulkMessage}</p>}
           {showBulkForm && (
+            <div className="manage-dialog-backdrop">
+            <section className="manage-dialog" role="dialog" aria-modal="true" aria-labelledby="bulk-unit-dialog-title">
+            <div className="manage-dialog-heading">
+              <div>
+                <h2 id="bulk-unit-dialog-title">Bulk-create units</h2>
+                <p>Create a consistent set of units for each floor.</p>
+              </div>
+              <button type="button" className="manage-dialog-close" aria-label="Close bulk unit form" disabled={bulkSaving} onClick={() => setShowBulkForm(false)}>×</button>
+            </div>
             <form className="manage-form" onSubmit={handleBulkCreate}>
               <label>
                 Units per floor
@@ -694,8 +751,13 @@ function UnitsPage() {
                 <button type="submit" className="manage-button" disabled={bulkSaving}>
                   {bulkSaving ? "Creating…" : `Create ${bulkTotal || 0} units`}
                 </button>
+                <button type="button" className="manage-button is-secondary" disabled={bulkSaving} onClick={() => setShowBulkForm(false)}>
+                  Cancel
+                </button>
               </div>
             </form>
+            </section>
+            </div>
           )}
         </section>
       )}
@@ -715,6 +777,7 @@ function UnitsPage() {
           {error}
         </p>
       )}
+      {unitNotice && <p className="manage-status" role="status">{unitNotice}</p>}
       {isLoading && <p className="manage-status">Loading units…</p>}
       {!isLoading && units.length === 0 && !error && (
         <p className="manage-status">
@@ -740,15 +803,6 @@ function UnitsPage() {
   function renderUnit(unit) {
     return (
           <li key={unit.id} className="manage-card">
-            {editingId === unit.id ? (
-              <UnitForm
-                initial={unitToForm(unit)}
-                fields={EDIT_FIELDS}
-                submitLabel="Save changes"
-                onSubmit={(body) => handleUpdate(unit.id, body)}
-                onCancel={() => setEditingId(null)}
-              />
-            ) : (
               <>
                 <div>
                   <strong>Unit {unit.unit_number}</strong>
@@ -794,7 +848,6 @@ function UnitsPage() {
                   </button>
                 </div>
               </>
-            )}
           </li>
     );
   }

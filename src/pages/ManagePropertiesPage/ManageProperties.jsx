@@ -8,6 +8,7 @@ import {
   listProperties,
   updateProperty,
 } from "../../api/propertiesApi";
+import { uploadPropertyPhoto } from "../../api/mediaApi";
 import { createUnit, listUnits } from "../../api/unitsAPI";
 import {
   CURRENCY_CODES,
@@ -47,6 +48,9 @@ const EMPTY_UNIT_FORM = {
   furnished: false,
   description: "",
 };
+const MAX_PROPERTY_PHOTOS = 30;
+const MAX_PROPERTY_PHOTO_BYTES = 10 * 1024 * 1024;
+const PROPERTY_PHOTO_EXTENSIONS = new Set(["jpg", "jpeg", "png", "webp"]);
 
 function toFormValues(property) {
   const country = property.country || "KE";
@@ -122,9 +126,12 @@ function ManagePropertiesPage() {
 
   const [form, setForm] = useState(EMPTY_FORM);
   const [unitForm, setUnitForm] = useState(EMPTY_UNIT_FORM);
+  const [formOpen, setFormOpen] = useState(false);
   const [editingId, setEditingId] = useState(null);
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState(null);
+  const [propertyPhotos, setPropertyPhotos] = useState([]);
+  const [uploadedPropertyPhotoCount, setUploadedPropertyPhotoCount] = useState(0);
   const [pendingUnitPropertyId, setPendingUnitPropertyId] = useState(null);
   const [wholeUnitId, setWholeUnitId] = useState(null);
 
@@ -170,18 +177,51 @@ function ManagePropertiesPage() {
 }
 
 function resetForm() {
+  setFormOpen(false);
   setForm(EMPTY_FORM);
   setUnitForm(EMPTY_UNIT_FORM);
+  setPropertyPhotos([]);
+  setUploadedPropertyPhotoCount(0);
   setEditingId(null);
   setWholeUnitId(null);
   setPendingUnitPropertyId(null);
   setFormError(null);
 }
 
+function handlePropertyPhotoChange(event) {
+  const files = Array.from(event.target.files ?? []);
+  event.target.value = "";
+  if (!files.length) return;
+
+  const invalidFile = files.find((file) => {
+    const extension = file.name.split(".").pop()?.toLowerCase();
+    return !extension || !PROPERTY_PHOTO_EXTENSIONS.has(extension) || file.size > MAX_PROPERTY_PHOTO_BYTES;
+  });
+  if (invalidFile) {
+    setFormError(
+      invalidFile.size > MAX_PROPERTY_PHOTO_BYTES
+        ? `${invalidFile.name} is larger than the 10 MB photo limit.`
+        : `${invalidFile.name} is not a supported photo. Use JPG, PNG, or WebP.`,
+    );
+    return;
+  }
+
+  if (uploadedPropertyPhotoCount + propertyPhotos.length + files.length > MAX_PROPERTY_PHOTOS) {
+    setFormError(`A property can have at most ${MAX_PROPERTY_PHOTOS} photos.`);
+    return;
+  }
+
+  setFormError(null);
+  setPropertyPhotos((current) => [...current, ...files]);
+}
+
 async function handleEdit(property) {
+  setFormOpen(true);
   setEditingId(property.id);
   setForm(toFormValues(property));
   setUnitForm(EMPTY_UNIT_FORM);
+  setPropertyPhotos([]);
+  setUploadedPropertyPhotoCount(0);
   setWholeUnitId(null);
   setPendingUnitPropertyId(null);
   setFormError(null);
@@ -250,6 +290,10 @@ async function handleEdit(property) {
   }
 
   const isWholeProperty = form.rental_type === "whole_property";
+  if (propertyPhotos.length === 0 && uploadedPropertyPhotoCount === 0) {
+    setFormError("Add at least one property photo before saving.");
+    return;
+  }
   const unitErrors = validateUnitForm(unitForm, {
     requireProperty: false,
     requireDetails: true,
@@ -288,6 +332,12 @@ async function handleEdit(property) {
         setPage(1);
       }
       setReloadCount((count) => count + 1);
+    }
+
+    for (const photo of propertyPhotos) {
+      await uploadPropertyPhoto(propertyId, photo);
+      setPropertyPhotos((current) => current.filter((item) => item !== photo));
+      setUploadedPropertyPhotoCount((count) => count + 1);
     }
 
     if (isWholeProperty) {
@@ -346,6 +396,11 @@ async function handleEdit(property) {
     setReloadCount((count) => count + 1);
   }
 
+  function closeForm() {
+    if (saving || pendingUnitPropertyId) return;
+    resetForm();
+  }
+
   const isWholeProperty = form.rental_type === "whole_property";
 
   if (!loggedIn) {
@@ -359,25 +414,67 @@ async function handleEdit(property) {
 
   return (
     <section className="manage-properties">
-      <h1>My properties</h1>
-      <p className="manage-intro">
-        Add, edit, and remove the properties you manage.
-      </p>
+      <header className="properties-page-heading">
+        <div>
+          <p className="properties-eyebrow">LANDLORD WORKSPACE</p>
+          <h1>My properties</h1>
+          <p className="manage-intro">
+            Keep your portfolio organized, track occupancy, and manage each
+            property from one place.
+          </p>
+        </div>
+        <button
+          type="button"
+          className="manage-button properties-add-button"
+          onClick={() => {
+            resetForm();
+            setFormOpen(true);
+          }}
+        >
+          <span aria-hidden="true">+</span> Add property
+        </button>
+      </header>
       {portfolioSummary && (
         <section className="portfolio-summary" aria-label="Portfolio occupancy summary">
-          <h2>Portfolio overview</h2>
-          <p>
-            {portfolioSummary.property_count} properties ·{" "}
-            {portfolioSummary.occupancy_summary.total_units} units ·{" "}
-            {portfolioSummary.occupancy_summary.occupied_units} occupied ·{" "}
-            {portfolioSummary.occupancy_summary.reserved_units} reserved ·{" "}
-            {portfolioSummary.occupancy_summary.vacant_units} vacant
-          </p>
+          <div className="portfolio-summary-heading">
+            <h2>Portfolio overview</h2>
+            <span>Live occupancy</span>
+          </div>
+          <div className="portfolio-metrics">
+            <div><strong>{portfolioSummary.property_count}</strong><span>Properties</span></div>
+            <div><strong>{portfolioSummary.occupancy_summary.total_units}</strong><span>Total units</span></div>
+            <div><strong>{portfolioSummary.occupancy_summary.occupied_units}</strong><span>Occupied</span></div>
+            <div><strong>{portfolioSummary.occupancy_summary.reserved_units}</strong><span>Reserved</span></div>
+            <div><strong>{portfolioSummary.occupancy_summary.vacant_units}</strong><span>Vacant</span></div>
+          </div>
         </section>
       )}
 
-      <form className="manage-form" onSubmit={handleSubmit}>
-        <h2>{editingId ? "Edit property" : "Add a property"}</h2>
+      {formOpen && (
+        <div className="property-dialog-backdrop">
+          <section
+            className="property-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="property-dialog-title"
+          >
+            <div className="property-dialog-heading">
+              <div>
+                <p className="properties-eyebrow">{editingId ? "PORTFOLIO UPDATE" : "NEW LISTING"}</p>
+                <h2 id="property-dialog-title">{editingId ? "Edit property" : "Add a property"}</h2>
+                <p>Enter the property details and first rentable unit to get your listing ready.</p>
+              </div>
+              <button
+                className="property-dialog-close"
+                type="button"
+                onClick={closeForm}
+                disabled={saving || Boolean(pendingUnitPropertyId)}
+                aria-label="Close property form"
+              >
+                ×
+              </button>
+            </div>
+            <form className="manage-form" onSubmit={handleSubmit}>
 
         {!editingId && (
           <label>
@@ -544,6 +641,41 @@ async function handleEdit(property) {
             rows={3}
           />
         </label>
+        {!editingId && (
+          <div className="property-photo-picker">
+            <label htmlFor="property-photos">Property photos *</label>
+            <input
+              id="property-photos"
+              type="file"
+              accept="image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp"
+              multiple
+              onChange={handlePropertyPhotoChange}
+              aria-describedby="property-photos-help"
+            />
+            <small id="property-photos-help">
+              Add at least one JPG, PNG, or WebP photo (up to 10 MB each). The first photo will be the cover.
+            </small>
+            {propertyPhotos.length > 0 && (
+              <ul className="property-photo-selection" aria-label="Selected property photos">
+                {propertyPhotos.map((photo, index) => (
+                  <li key={`${photo.name}-${photo.lastModified}-${index}`}>
+                    <span>{photo.name} · {Math.ceil(photo.size / 1024)} KB</span>
+                    <button
+                      type="button"
+                      className="manage-button manage-button--ghost"
+                      onClick={() =>
+                        setPropertyPhotos((current) => current.filter((item) => item !== photo))
+                      }
+                      aria-label={`Remove ${photo.name}`}
+                    >
+                      Remove
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        )}
         {(!editingId || isWholeProperty) && (
   <div className="property-unit-section">
             <h3>{isWholeProperty ? "Whole property details" : "First unit details"}</h3>
@@ -713,17 +845,19 @@ async function handleEdit(property) {
           <button type="submit" className="manage-button" disabled={saving}>
             {saving ? "Saving..." : editingId ? "Save changes" : "Add property"}
           </button>
-          {editingId && (
-            <button
-              type="button"
-              className="manage-button manage-button--ghost"
-              onClick={resetForm}
-            >
-              Cancel
-            </button>
-          )}
+          <button
+            type="button"
+            className="manage-button manage-button--ghost"
+            onClick={closeForm}
+            disabled={saving || Boolean(pendingUnitPropertyId)}
+          >
+            Cancel
+          </button>
         </div>
-      </form>
+            </form>
+          </section>
+        </div>
+      )}
 
       {loading && <p className="manage-status">Loading properties...</p>}
 
@@ -737,14 +871,27 @@ async function handleEdit(property) {
       )}
 
       {!loading && !loadError && properties.length === 0 && (
-        <p className="manage-status">
-          You have no properties yet. Add your first one above.
-        </p>
+        <div className="properties-empty-state">
+          <span aria-hidden="true">⌂</span>
+          <h2>Your portfolio is ready to begin</h2>
+          <p>Add your first property to start managing units, occupancy, and rental details.</p>
+          <button type="button" className="manage-button" onClick={() => setFormOpen(true)}>
+            Add your first property
+          </button>
+        </div>
       )}
 
       {properties.length > 0 && (
-        <ul className="manage-list">
-          {properties.map((property) => (
+        <section className="properties-portfolio">
+          <div className="properties-section-heading">
+            <div>
+              <p className="properties-eyebrow">YOUR COLLECTION</p>
+              <h2>Property portfolio</h2>
+            </div>
+            {pagination && <span>{pagination.total} {pagination.total === 1 ? "property" : "properties"}</span>}
+          </div>
+          <ul className="manage-list">
+            {properties.map((property) => (
             <li key={property.id} className="manage-item">
               <div className="manage-item-info">
                 <h3>{property.name}</h3>
@@ -770,27 +917,6 @@ async function handleEdit(property) {
                   <p className="manage-item-description">
                     {property.description}
                   </p>
-                )}
-                {!loading && !loadError && pagination?.pages > 1 && (
-                  <nav className="pagination-controls" aria-label="Property pages">
-                    <button
-                      type="button"
-                      onClick={() => setPage((current) => current - 1)}
-                      disabled={!pagination.has_prev}
-                    >
-                      Previous
-                    </button>
-                    <span>
-                      Page {pagination.page} of {pagination.pages} ({pagination.total} total)
-                    </span>
-                    <button
-                      type="button"
-                      onClick={() => setPage((current) => current + 1)}
-                      disabled={!pagination.has_next}
-                    >
-                      Next
-                    </button>
-                  </nav>
                 )}
               </div>
               <div className="manage-actions">
@@ -818,8 +944,30 @@ async function handleEdit(property) {
                 </button>
               </div>
             </li>
-          ))}
-        </ul>
+            ))}
+          </ul>
+          {!loading && !loadError && pagination?.pages > 1 && (
+            <nav className="pagination-controls" aria-label="Property pages">
+              <button
+                type="button"
+                onClick={() => setPage((current) => current - 1)}
+                disabled={!pagination.has_prev}
+              >
+                Previous
+              </button>
+              <span>
+                Page {pagination.page} of {pagination.pages} ({pagination.total} total)
+              </span>
+              <button
+                type="button"
+                onClick={() => setPage((current) => current + 1)}
+                disabled={!pagination.has_next}
+              >
+                Next
+              </button>
+            </nav>
+          )}
+        </section>
       )}
     </section>
   );

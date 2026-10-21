@@ -10,6 +10,7 @@ class Config:
     @classmethod
     def load(cls):
         jwt_secret = os.getenv("JWT_SECRET_KEY")
+        s3_bucket = os.getenv("S3_BUCKET")
         return {
             "SQLALCHEMY_DATABASE_URI": (
                 os.getenv("SQLALCHEMY_DATABASE_URI") or os.getenv("DATABASE_URL")
@@ -22,10 +23,33 @@ class Config:
             "LOGIN_MAX_ATTEMPTS": 5,
             "LOGIN_ATTEMPT_WINDOW_MINUTES": 15,
             "LOGIN_LOCKOUT_MINUTES": 15,
+            "REQUIRE_TWO_FACTOR": os.getenv("REQUIRE_TWO_FACTOR", "true").lower()
+            == "true",
+            "TOTP_ENCRYPTION_KEY": os.getenv("TOTP_ENCRYPTION_KEY"),
+            "GOOGLE_CLIENT_ID": os.getenv("GOOGLE_CLIENT_ID"),
+            "TWILIO_ACCOUNT_SID": os.getenv("TWILIO_ACCOUNT_SID"),
+            "TWILIO_AUTH_TOKEN": os.getenv("TWILIO_AUTH_TOKEN"),
+            "TWILIO_FROM_NUMBER": os.getenv("TWILIO_FROM_NUMBER"),
+            "WEBAUTHN_RP_ID": os.getenv("WEBAUTHN_RP_ID", "localhost"),
+            "WEBAUTHN_RP_NAME": os.getenv(
+                "WEBAUTHN_RP_NAME", "Property Finder"
+            ),
+            "WEBAUTHN_ORIGIN": os.getenv(
+                "WEBAUTHN_ORIGIN", "http://localhost:5173"
+            ),
             "TENANT_PII_ENCRYPTION_KEY": os.getenv(
                 "TENANT_PII_ENCRYPTION_KEY"
             ),
-            "S3_BUCKET": os.getenv("S3_BUCKET"),
+            "OBJECT_STORAGE_BACKEND": os.getenv(
+                "OBJECT_STORAGE_BACKEND", "s3" if s3_bucket else "local"
+            ).strip().lower(),
+            "LOCAL_STORAGE_PATH": os.getenv("LOCAL_STORAGE_PATH")
+            or os.path.join(
+                os.path.dirname(os.path.dirname(__file__)),
+                "instance",
+                "object-storage",
+            ),
+            "S3_BUCKET": s3_bucket,
             "S3_REGION": os.getenv("S3_REGION", "us-east-1"),
             "S3_ENDPOINT_URL": os.getenv("S3_ENDPOINT_URL"),
             "S3_SERVER_SIDE_ENCRYPTION": os.getenv(

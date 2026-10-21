@@ -8,6 +8,7 @@ from sqlalchemy.exc import IntegrityError
 
 from server.extensions import db
 from server.models import Property, User
+from server.models_media import PropertyPhoto
 from server.models_application import Application, RESERVED_APPLICATION_STATUSES
 from server.models_unit_lease import Lease, Room, Unit
 from server.occupancy import unit_occupancy
@@ -194,6 +195,28 @@ def list_public_units():
         page=page, per_page=per_page, error_out=False
     )
     occupancy = unit_occupancy(row[0].id for row in result.items)
+    unit_ids = [unit.id for unit, *_ in result.items]
+    property_ids = {unit.property_id for unit, *_ in result.items}
+    photos = (
+        PropertyPhoto.query.filter(
+            or_(
+                PropertyPhoto.unit_id.in_(unit_ids),
+                PropertyPhoto.property_id.in_(property_ids),
+            )
+        )
+        .order_by(PropertyPhoto.is_cover.desc(), PropertyPhoto.id.asc())
+        .all()
+        if unit_ids
+        else []
+    )
+    unit_photos = {}
+    property_photos = {}
+    for photo in photos:
+        if photo.unit_id is not None:
+            unit_photos.setdefault(photo.unit_id, photo)
+        elif photo.property_id is not None:
+            property_photos.setdefault(photo.property_id, photo)
+
     return {
         "units": [
             {
@@ -211,6 +234,11 @@ def list_public_units():
                 "property_postal_code": property_zip_code,
                 "property_country": property_country,
                 "property_time_zone": property_time_zone,
+                "photo_url": (
+                    unit_photos.get(unit.id) or property_photos.get(unit.property_id)
+                ).to_dict()["url"]
+                if unit_photos.get(unit.id) or property_photos.get(unit.property_id)
+                else None,
             }
             for (
                 unit,

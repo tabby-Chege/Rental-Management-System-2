@@ -74,89 +74,117 @@ function Register() {
 
   return (
     <section className="auth-page">
-      <div className="auth-card">
-        <h1>Create your account</h1>
-        <p className="auth-description">
-          Register as a landlord or a tenant to access the right workflow.
-        </p>
-
-        {error && (
-          <p className="auth-error" role="alert">
-            {error}
+      <div className="auth-layout auth-layout--register">
+        <aside className="auth-aside">
+          <span className="auth-eyebrow">Welcome to Property Finder</span>
+          <h2>Your next chapter starts at home.</h2>
+          <p>
+            Create an account to access rental tools tailored to the way you
+            rent or manage property.
           </p>
-        )}
+          <ul className="auth-highlights">
+            <li>Choose the account type that fits you</li>
+            <li>Browse homes and follow applications</li>
+            <li>Manage rental details from one workspace</li>
+          </ul>
+          <Link className="auth-aside-link" to="/properties">
+            Browse available properties <span aria-hidden="true">→</span>
+          </Link>
+          <span className="auth-decoration auth-decoration--one" aria-hidden="true" />
+          <span className="auth-decoration auth-decoration--two" aria-hidden="true" />
+        </aside>
 
-        <form onSubmit={handleSubmit}>
-          <label htmlFor="name">Full name</label>
-          <input
-            id="name"
-            name="name"
-            type="text"
-            value={formData.name}
-            onChange={handleChange}
-            autoComplete="name"
-            required
-          />
-
-          <label htmlFor="email">Email address</label>
-          <input
-            id="email"
-            name="email"
-            type="email"
-            value={formData.email}
-            onChange={handleChange}
-            autoComplete="email"
-            required
-          />
-
-          <label htmlFor="role">Account type</label>
-          <select
-            id="role"
-            name="role"
-            value={formData.role}
-            onChange={handleChange}
-          >
-            <option value="landlord">Landlord</option>
-            <option value="tenant">Tenant</option>
-          </select>
-
-          <label htmlFor="password">Password</label>
-          <input
-            id="password"
-            name="password"
-            type="password"
-            value={formData.password}
-            onChange={handleChange}
-            autoComplete="new-password"
-            minLength={10}
-            maxLength={72}
-            required
-          />
+        <div className="auth-card">
+          <span className="auth-card-kicker">Get started</span>
+          <h1>Create your account</h1>
           <p className="auth-description">
-            Use 10 or more characters with uppercase and lowercase letters, a number, and a symbol.
+            Register as a landlord or a tenant to access the right workflow.
           </p>
 
-          <label htmlFor="confirmPassword">Confirm password</label>
-          <input
-            id="confirmPassword"
-            name="confirmPassword"
-            type="password"
-            value={formData.confirmPassword}
-            onChange={handleChange}
-            autoComplete="new-password"
-            minLength={10}
-            maxLength={72}
-            required
-          />
+          {error && (
+            <p className="auth-error" role="alert">
+              {error}
+            </p>
+          )}
 
-          <button type="submit" disabled={loading}>
-            {loading ? "Creating account..." : "Create account"}
-          </button>
-        </form>
+          <form onSubmit={handleSubmit}>
+            <label htmlFor="name">Full name</label>
+            <input
+              id="name"
+              name="name"
+              type="text"
+              value={formData.name}
+              onChange={handleChange}
+              autoComplete="name"
+              placeholder="Your full name"
+              required
+            />
 
-        <p className="auth-switch">
-          Already have an account? <Link to="/login">Log in</Link>
-        </p>
+            <label htmlFor="email">Email address</label>
+            <input
+              id="email"
+              name="email"
+              type="email"
+              value={formData.email}
+              onChange={handleChange}
+              autoComplete="email"
+              placeholder="you@example.com"
+              required
+            />
+
+            <label htmlFor="role">Account type</label>
+            <select
+              id="role"
+              name="role"
+              value={formData.role}
+              onChange={handleChange}
+            >
+              <option value="landlord">Landlord</option>
+              <option value="tenant">Tenant</option>
+            </select>
+
+            <label htmlFor="password">Password</label>
+            <input
+              id="password"
+              name="password"
+              type="password"
+              value={formData.password}
+              onChange={handleChange}
+              autoComplete="new-password"
+              minLength={10}
+              maxLength={72}
+              placeholder="Create a strong password"
+              required
+            />
+            <p className="auth-password-hint">
+              Use 10 or more characters with uppercase and lowercase letters, a
+              number, and a symbol.
+            </p>
+
+            <label htmlFor="confirmPassword">Confirm password</label>
+            <input
+              id="confirmPassword"
+              name="confirmPassword"
+              type="password"
+              value={formData.confirmPassword}
+              onChange={handleChange}
+              autoComplete="new-password"
+              minLength={10}
+              maxLength={72}
+              placeholder="Enter your password again"
+              required
+            />
+
+            <button type="submit" disabled={loading}>
+              {loading ? "Creating account..." : "Create account"}
+              {!loading && <span aria-hidden="true">→</span>}
+            </button>
+          </form>
+
+          <p className="auth-switch">
+            Already have an account? <Link to="/login">Log in</Link>
+          </p>
+        </div>
       </div>
     </section>
   );

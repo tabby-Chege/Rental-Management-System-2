@@ -14,7 +14,15 @@ from server.routes.units import units_bp
 from server.routes.leases import leases_bp
 from server.models import Property, RevokedToken, User
 from server.models_application import Application, ReservationNotification
+from server.models_communications import PropertyConversation, PropertyMessage
 from server.models_media import ListingReport, PropertyPhoto
+from server.models_landlord_tools import LeaseDocument, MaintenancePhoto, MaintenanceRequest
+from server.models_auth_factors import (
+    AuthOtpChallenge,
+    AuthPasskeyChallenge,
+    PasskeyCredential,
+    RecoveryCode,
+)
 from server.models_payment import (
     DepositLedgerEntry,
     EmailOutbox,
@@ -30,6 +38,8 @@ from server.routes.tenant_profiles import tenant_profiles_bp
 from server.routes.notifications import notifications_bp
 from server.routes.payment_gateway import payment_gateway_bp
 from server.routes.media import media_bp
+from server.routes.communications import communications_bp
+from server.routes.landlord_tools import landlord_tools_bp
 from server.reservations import process_reservations
 from server.payment_service import (
     process_email_outbox,
@@ -90,7 +100,14 @@ def create_app(test_config=None):
 
     @jwt.token_in_blocklist_loader
     def token_in_blocklist(jwt_header, jwt_payload):
-        return db.session.get(RevokedToken, jwt_payload["jti"]) is not None
+        if db.session.get(RevokedToken, jwt_payload["jti"]) is not None:
+            return True
+        if app.config.get("REQUIRE_TWO_FACTOR"):
+            if jwt_payload.get("mfa_verified") is not True:
+                return True
+            user = db.session.get(User, jwt_payload.get("sub"))
+            return user is None or not user.totp_enabled
+        return False
 
     @jwt.needs_fresh_token_loader
     def fresh_token_callback(jwt_header, jwt_payload):
@@ -116,6 +133,8 @@ def create_app(test_config=None):
     app.register_blueprint(notifications_bp)
     app.register_blueprint(payment_gateway_bp)
     app.register_blueprint(media_bp)
+    app.register_blueprint(communications_bp)
+    app.register_blueprint(landlord_tools_bp)
 
     @app.cli.command("process-reservations")
     def process_reservations_command():

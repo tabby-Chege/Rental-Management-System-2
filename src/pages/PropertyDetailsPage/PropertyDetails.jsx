@@ -1,10 +1,11 @@
 import { useEffect, useState } from "react";
-import { Link, useLocation, useParams } from "react-router-dom";
+import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
 import {
   getPublicProperty,
   listPublicPropertyUnits,
 } from "../../api/propertiesApi";
 import { createApplication, listApplications } from "../../api/applicationsApi";
+import { startConversation } from "../../api/conversationsApi";
 import { getCurrentUser, getToken } from "../../api/authAPI";
 import {
   getMyTenantProfile,
@@ -24,6 +25,7 @@ import "./PropertyDetail.css";
 
 function PropertyDetailsPage() {
   const { id } = useParams();
+  const navigate = useNavigate();
   const location = useLocation();
   const selectedUnitId = location.hash.startsWith("#unit-")
     ? location.hash.slice("#unit-".length)
@@ -35,6 +37,9 @@ function PropertyDetailsPage() {
   const [error, setError] = useState("");
   const [applicationError, setApplicationError] = useState("");
   const [applicationMessage, setApplicationMessage] = useState("");
+  const [inquiryBody, setInquiryBody] = useState("");
+  const [inquiryError, setInquiryError] = useState("");
+  const [sendingInquiry, setSendingInquiry] = useState(false);
   const [moveInDate, setMoveInDate] = useState("");
   const [message, setMessage] = useState("");
   const [applyingUnitId, setApplyingUnitId] = useState(null);
@@ -163,6 +168,20 @@ function PropertyDetailsPage() {
       setApplicationError(requestError.message || "Could not submit your application.");
     } finally {
       setApplyingUnitId(null);
+    }
+  }
+
+  async function sendPropertyInquiry(event) {
+    event.preventDefault();
+    setInquiryError("");
+    setSendingInquiry(true);
+    try {
+      const result = await startConversation(property.id, inquiryBody);
+      navigate(`/messages?conversation=${result.conversation.id}`);
+    } catch (requestError) {
+      setInquiryError(requestError.message || "Could not send your question.");
+    } finally {
+      setSendingInquiry(false);
     }
   }
 
@@ -333,6 +352,31 @@ function PropertyDetailsPage() {
             {property.occupancy_summary.vacant_units} vacant
           </strong>
         </section>
+      )}
+      {user?.role === "tenant" && property.owner_id !== user.id && (
+        <details className="details-box listing-report property-inquiry">
+          <summary>Ask the landlord a question</summary>
+          <form onSubmit={sendPropertyInquiry}>
+            <label>
+              Your question
+              <textarea
+                value={inquiryBody}
+                maxLength={5000}
+                required
+                onChange={(event) => setInquiryBody(event.target.value)}
+              />
+            </label>
+            {inquiryError && <p className="details-error" role="alert">{inquiryError}</p>}
+            <button type="submit" disabled={sendingInquiry || !inquiryBody.trim()}>
+              {sendingInquiry ? "Sending…" : "Send question"}
+            </button>
+          </form>
+        </details>
+      )}
+      {!user && (
+        <p className="details-inquiry-login">
+          <Link to="/login">Log in as a tenant to ask the landlord a question</Link>
+        </p>
       )}
       {(property.photos?.length > 0 || canManagePhotos) && (
         <section className="details-box listing-photos" aria-label="Property photos">
