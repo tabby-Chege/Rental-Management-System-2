@@ -1,6 +1,4 @@
 from sqlalchemy import false
-import math
-
 from flask import Blueprint, jsonify, request
 from flask_jwt_extended import get_jwt_identity, jwt_required
 from sqlalchemy.exc import IntegrityError
@@ -9,7 +7,14 @@ from server.extensions import db
 from server.models import Payment, Property, User
 from server.models_tenant import Tenant
 from server.models_unit_lease import Lease, Unit
+from server.money import parse_money
+from server.models_payment import DepositLedgerEntry
 from server.pagination import get_pagination, pagination_metadata
+from server.payment_service import (
+    add_lease_financial_records,
+    apply_payment_effects,
+    prepare_rent_invoices,
+)
 
 payments_bp = Blueprint("payments_bp", __name__)
 
@@ -131,19 +136,23 @@ def create_payment():
         return jsonify({"error": "Request body must be valid JSON"}), 400
 
     lease_id = data.get("lease_id")
-    amount = data.get("amount")
+    raw_amount = data.get("amount")
     payment_method = data.get("payment_method")
     status = data.get("status", "Pending")
     reference_code = data.get("reference_code")
+    payment_type = data.get("payment_type", "rent")
+    if set(data) - {
+        "lease_id",
+        "amount",
+        "payment_method",
+        "status",
+        "reference_code",
+        "payment_type",
+    }:
+        return jsonify({"error": "Unsupported payment fields"}), 400
 
     if isinstance(lease_id, bool) or not isinstance(lease_id, int) or lease_id <= 0:
         return jsonify({"error": "lease_id must be a positive integer"}), 400
-
-    if isinstance(amount, bool) or not isinstance(amount, (int, float)):
-        return jsonify({"error": "Amount must be a positive number"}), 400
-
-    if not math.isfinite(amount) or amount <= 0:
-        return jsonify({"error": "Amount must be a positive, finite number"}), 400
 
     if payment_method not in PAYMENT_METHODS:
         return jsonify({
@@ -153,6 +162,10 @@ def create_payment():
     if status not in PAYMENT_STATUSES:
         return jsonify({
             "error": "status must be Pending, Completed, or Failed"
+        }), 400
+    if payment_type not in {"reservation", "rent", "deposit", "other"}:
+        return jsonify({
+            "error": "payment_type must be reservation, rent, deposit, or other"
         }), 400
 
     if reference_code is not None:
@@ -169,28 +182,68 @@ def create_payment():
     if not lease:
         return jsonify({"error": "Lease not found"}), 404
 
+    unit = db.session.get(Unit, lease.unit_id)
+    prop = db.session.get(Property, unit.property_id) if unit else None
+    if not prop:
+        return jsonify({"error": "The lease has no valid property"}), 409
+    amount, amount_error = parse_money(raw_amount, prop.currency)
+    if amount_error:
+        return jsonify({"error": amount_error}), 400
+
     # Admins can manage payments system-wide.
     # Landlords can only record payments for leases on their own properties.
-    if user.role != "admin":
-        unit = db.session.get(Unit, lease.unit_id)
-        prop = db.session.get(Property, unit.property_id) if unit else None
+    if user.role != "admin" and prop.owner_id != user.id:
+        return jsonify({
+            "error": "You do not have permission to record payment for this lease"
+        }), 403
 
-        if not prop or prop.owner_id != user.id:
-            return jsonify({
-                "error": "You do not have permission to record payment for this lease"
-            }), 403
+    if payment_type == "rent":
+        try:
+            prepare_rent_invoices(lease, amount)
+        except ValueError as validation_error:
+            db.session.rollback()
+            return jsonify({"error": str(validation_error)}), 400
+    elif payment_type == "deposit":
+        add_lease_financial_records(lease)
+        charged = sum(
+            (
+                entry.amount
+                for entry in DepositLedgerEntry.query.filter_by(
+                    lease_id=lease.id, entry_type="charge"
+                ).all()
+            ),
+            start=0,
+        )
+        paid = sum(
+            (
+                entry.amount
+                for entry in DepositLedgerEntry.query.filter_by(
+                    lease_id=lease.id, entry_type="payment"
+                ).all()
+            ),
+            start=0,
+        )
+        if amount > charged - paid:
+            return jsonify({"error": "Payment exceeds the outstanding deposit balance"}), 400
 
     payment = Payment(
         lease_id=lease.id,
         amount=amount,
+        currency=prop.currency,
         payment_method=payment_method,
         status=status,
         reference_code=reference_code,
+        provider="manual",
+        provider_reference=reference_code,
+        payment_type=payment_type,
     )
 
     db.session.add(payment)
 
     try:
+        if status == "Completed":
+            db.session.flush()
+            apply_payment_effects(payment)
         db.session.commit()
     except IntegrityError:
         db.session.rollback()

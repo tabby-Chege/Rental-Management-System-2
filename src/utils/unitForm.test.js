@@ -39,6 +39,20 @@ test("unit form requires rental details and validates rent and bathroom precisio
   };
   assert.deepEqual(validateUnitForm(validUnit, { requireDetails: true }), {});
   assert.equal(
+    validateUnitForm(
+      { ...validUnit, rent_amount: "12000.123" },
+      { requireDetails: true, currency: "USD" }
+    ).rent_amount,
+    "Monthly rent may have at most 2 decimal places for USD."
+  );
+  assert.deepEqual(
+    validateUnitForm(
+      { ...validUnit, rent_amount: "12000.123" },
+      { requireDetails: true, currency: "KWD" }
+    ),
+    {}
+  );
+  assert.equal(
     validateUnitForm({ ...validUnit, rent_amount: "0" }, { requireDetails: true }).rent_amount,
     "Monthly rent must be greater than zero."
   );

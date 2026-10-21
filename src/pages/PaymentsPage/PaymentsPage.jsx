@@ -1,7 +1,19 @@
 import { useEffect, useState } from "react";
-import { listPayments, createPayment } from "../../api/paymentsAPI";
-import { listLeases } from "../../api/leasesAPI";
+import { useSearchParams } from "react-router-dom";
+import {
+  confirmBankTransfer,
+  createDepositLedgerEntry,
+  createPayment,
+  getDepositLedger,
+  getPaymentAttempt,
+  listPaymentAttempts,
+  listPayments,
+  listRentInvoices,
+} from "../../api/paymentsAPI";
+import { listLeases, listMyLeases } from "../../api/leasesAPI";
 import { getCurrentUser } from "../../api/authAPI";
+import { CURRENCY_CODES, currencyPrecision, formatMoney } from "../../utils/money";
+import PaymentCheckoutForm from "../../Components/PaymentCheckoutForm";
 import "../manage.css";
 
 const PER_PAGE = 10;
@@ -14,13 +26,6 @@ const INITIAL_FORM = {
   reference_code: "",
 };
 
-function formatAmount(amount) {
-  return Number(amount).toLocaleString(undefined, {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  });
-}
-
 function formatDate(value) {
   const date = new Date(value);
   return Number.isNaN(date.getTime())
@@ -29,6 +34,8 @@ function formatDate(value) {
 }
 
 function PaymentsPage() {
+  const [searchParams] = useSearchParams();
+  const attemptId = searchParams.get("attempt_id");
   const [payments, setPayments] = useState([]);
   const [pagination, setPagination] = useState(null);
   const [page, setPage] = useState(1);
@@ -40,11 +47,33 @@ function PaymentsPage() {
   const [leases, setLeases] = useState([]);
   const [leasesLoading, setLeasesLoading] = useState(true);
   const [leaseError, setLeaseError] = useState("");
+  const [invoices, setInvoices] = useState([]);
+  const [depositLedger, setDepositLedger] = useState({ entries: [], balances: [] });
+  const [pendingTransfers, setPendingTransfers] = useState([]);
+  const [transferReferences, setTransferReferences] = useState({});
+  const [depositForm, setDepositForm] = useState({
+    lease_id: "",
+    entry_type: "refund",
+    amount: "",
+    note: "",
+  });
+  const [returnedAttempt, setReturnedAttempt] = useState(null);
+  const [paymentFormOpen, setPaymentFormOpen] = useState(false);
+  const [depositFormOpen, setDepositFormOpen] = useState(false);
+  const [depositSaving, setDepositSaving] = useState(false);
 
   const [form, setForm] = useState(INITIAL_FORM);
   const [isSaving, setIsSaving] = useState(false);
   const [formError, setFormError] = useState("");
   const [successMessage, setSuccessMessage] = useState("");
+  const selectedLease = leases.find((lease) => String(lease.id) === form.lease_id);
+  const currency = selectedLease?.currency || CURRENCY_CODES[0];
+  const selectedDepositLease = leases.find(
+    (lease) => String(lease.id) === depositForm.lease_id,
+  );
+  const depositPrecision = currencyPrecision(
+    selectedDepositLease?.currency || CURRENCY_CODES[0],
+  );
 
   // Determine the user's role and load leases for authorized users.
   useEffect(() => {
@@ -62,15 +91,24 @@ function PaymentsPage() {
         if (ignore) return;
 
         setCanRecord(allowed);
-
+        const [availableLeases, availableInvoices, availableDeposits] =
+          await Promise.all([
+            allowed ? listLeases() : role === "tenant" ? listMyLeases() : [],
+            listRentInvoices(),
+            getDepositLedger(),
+          ]);
+        if (!ignore) {
+          setLeases(availableLeases);
+          setInvoices(availableInvoices);
+          setDepositLedger(availableDeposits);
+        }
         if (allowed) {
-          const availableLeases = await listLeases();
-
+          const attempts = await listPaymentAttempts({ status: "pending" });
           if (!ignore) {
-            setLeases(availableLeases);
+            setPendingTransfers(
+              attempts.filter((attempt) => attempt.provider === "bank_transfer"),
+            );
           }
-        } else {
-          setLeases([]);
         }
       } catch (requestError) {
         if (!ignore) {
@@ -91,6 +129,31 @@ function PaymentsPage() {
       ignore = true;
     };
   }, []);
+
+  useEffect(() => {
+    if (!attemptId) return undefined;
+    let ignore = false;
+    let interval;
+    const loadAttempt = async () => {
+      try {
+        const attempt = await getPaymentAttempt(attemptId);
+        if (!ignore) {
+          setReturnedAttempt(attempt);
+          if (attempt.status !== "pending" && interval) {
+            window.clearInterval(interval);
+          }
+        }
+      } catch (requestError) {
+        if (!ignore) setError(requestError.message);
+      }
+    };
+    loadAttempt();
+    interval = window.setInterval(loadAttempt, 15000);
+    return () => {
+      ignore = true;
+      window.clearInterval(interval);
+    };
+  }, [attemptId]);
 
   // Load the existing payment history.
   useEffect(() => {
@@ -160,6 +223,11 @@ function PaymentsPage() {
       setFormError("Enter a valid amount greater than zero.");
       return;
     }
+    const precision = currencyPrecision(currency);
+    if (amount !== Number(amount.toFixed(precision))) {
+      setFormError(`Amount may have at most ${precision} decimal places for ${currency}.`);
+      return;
+    }
 
     const referenceCode = form.reference_code.trim();
 
@@ -183,12 +251,63 @@ function PaymentsPage() {
       setPage(1);
       setRetryCount((count) => count + 1);
       setSuccessMessage("Payment recorded successfully.");
+      setPaymentFormOpen(false);
     } catch (requestError) {
       setFormError(
         requestError.message || "Could not record the payment."
       );
     } finally {
       setIsSaving(false);
+    }
+  }
+
+  async function confirmTransfer(attempt) {
+    setFormError("");
+    const reference = (transferReferences[attempt.id] || "").trim();
+    if (!reference) {
+      setFormError("Enter the bank transfer reference before confirming.");
+      return;
+    }
+    try {
+      await confirmBankTransfer(attempt.id, reference);
+      setPendingTransfers((current) =>
+        current.filter((item) => item.id !== attempt.id),
+      );
+      setRetryCount((count) => count + 1);
+      setSuccessMessage("Bank transfer confirmed.");
+    } catch (requestError) {
+      setFormError(requestError.message || "Could not confirm the transfer.");
+    }
+  }
+
+  async function recordDepositEntry(event) {
+    event.preventDefault();
+    setFormError("");
+    if (!depositForm.lease_id || Number(depositForm.amount) <= 0) {
+      setFormError("Select a lease and enter a positive deposit amount.");
+      return;
+    }
+    setDepositSaving(true);
+    try {
+      await createDepositLedgerEntry({
+        ...depositForm,
+        lease_id: Number(depositForm.lease_id),
+        amount: Number(depositForm.amount),
+      });
+      setDepositFormOpen(false);
+      setDepositForm((current) => ({ ...current, amount: "", note: "" }));
+      setSuccessMessage("Deposit ledger entry saved.");
+      try {
+        setDepositLedger(await getDepositLedger());
+      } catch (requestError) {
+        setFormError(`Deposit entry saved, but the ledger could not be refreshed: ${requestError.message}`);
+        return;
+      }
+      setSuccessMessage("Deposit ledger updated.");
+    } catch (requestError) {
+      setFormError(requestError.message || "Could not update the deposit ledger.");
+    } finally {
+      setDepositSaving(false);
     }
   }
 
@@ -199,10 +318,217 @@ function PaymentsPage() {
       <p className="manage-status">
         Payments are read from the records associated with your leases.
       </p>
+      {formError && <p className="manage-error" role="alert">{formError}</p>}
+      {successMessage && <p className="manage-status" role="status">{successMessage}</p>}
+
+      {returnedAttempt && (
+        <div className="manage-card" role="status">
+          <strong>Checkout status: {returnedAttempt.status}</strong>
+          {returnedAttempt.status === "pending" && (
+            <p>Payment confirmation is still pending. This status refreshes automatically.</p>
+          )}
+          {returnedAttempt.status === "refund_required" && (
+            <p>The reservation expired before this payment was confirmed. Contact the landlord about a refund.</p>
+          )}
+        </div>
+      )}
+
+      {!canRecord && leases.length > 0 && (
+        <section aria-label="Pay rent">
+          <h2>Pay rent or deposit</h2>
+          <ul className="manage-list">
+            {leases.filter((lease) => lease.status === "active").map((lease) => {
+              const balance = depositLedger.balances?.find(
+                (item) => item.lease_id === lease.id,
+              );
+              return (
+                <li className="manage-card" key={lease.id}>
+                  <div>
+                    <strong>Lease #{lease.id}</strong>
+                    <p>Rent: {formatMoney(lease.monthly_rent, lease.currency)} per month</p>
+                    <PaymentCheckoutForm
+                      leaseId={lease.id}
+                      defaultAmount={lease.monthly_rent}
+                      currency={lease.currency}
+                    />
+                    {(balance?.outstanding > 0 || balance?.held > 0) && (
+                      <>
+                        <p>
+                          Deposit balance: {formatMoney(balance.outstanding, balance.currency)}
+                          {" · "}Held: {formatMoney(balance.held, balance.currency)}
+                        </p>
+                        {balance.outstanding > 0 && (
+                          <PaymentCheckoutForm
+                            leaseId={lease.id}
+                            defaultAmount={balance.outstanding}
+                            currency={balance.currency}
+                            paymentType="deposit"
+                          />
+                        )}
+                      </>
+                    )}
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+        </section>
+      )}
+
+      {invoices.length > 0 && (
+        <section aria-label="Rent invoices">
+          <h2>Rent due dates</h2>
+          <ul className="manage-list">
+            {invoices.map((invoice) => (
+              <li className="manage-card" key={invoice.id}>
+                <strong>Lease #{invoice.lease_id} · Due {invoice.due_date}</strong>
+                <p>
+                  {formatMoney(invoice.amount_paid, invoice.currency)} paid of{" "}
+                  {formatMoney(invoice.amount, invoice.currency)} · Balance{" "}
+                  {formatMoney(invoice.balance, invoice.currency)}
+                </p>
+                <span className={`manage-badge is-${invoice.status}`}>{invoice.status}</span>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+
+      {canRecord && pendingTransfers.length > 0 && (
+        <section className="manage-card" aria-label="Bank transfers awaiting confirmation">
+          <h2>Bank transfers awaiting confirmation</h2>
+          {pendingTransfers.map((attempt) => (
+            <div className="manage-form" key={attempt.id}>
+              <p>
+                Attempt #{attempt.id}: {formatMoney(attempt.amount, attempt.currency)}
+                {" · "}Lease/application #{attempt.lease_id || attempt.application_id}
+              </p>
+              <label className="manage-field">
+                Provider reference
+                <input
+                  value={transferReferences[attempt.id] || ""}
+                  maxLength={160}
+                  onChange={(event) => setTransferReferences((current) => ({
+                    ...current,
+                    [attempt.id]: event.target.value,
+                  }))}
+                />
+              </label>
+              <button
+                className="manage-button"
+                type="button"
+                onClick={() => confirmTransfer(attempt)}
+              >
+                Confirm transfer
+              </button>
+            </div>
+          ))}
+        </section>
+      )}
+      {canRecord && leases.length > 0 && (
+        <section className="manage-card payment-entry-card" aria-label="Manage deposit ledger">
+          <h2>Record deposit charge or refund</h2>
+          <button type="button" className="manage-button is-secondary" onClick={() => {
+            setFormError("");
+            setSuccessMessage("");
+            setDepositFormOpen(true);
+          }}>
+            Add ledger entry
+          </button>
+          {depositFormOpen && (
+          <div className="manage-dialog-backdrop">
+          <section className="manage-dialog" role="dialog" aria-modal="true" aria-labelledby="deposit-entry-dialog-title">
+          <div className="manage-dialog-heading">
+            <div>
+              <h2 id="deposit-entry-dialog-title">Record deposit charge or refund</h2>
+              <p>Choose a lease and enter the deposit ledger adjustment.</p>
+            </div>
+            <button type="button" className="manage-dialog-close" aria-label="Close deposit form" disabled={depositSaving} onClick={() => setDepositFormOpen(false)}>×</button>
+          </div>
+          <form className="manage-form" onSubmit={recordDepositEntry}>
+            <label className="manage-field">
+              Lease
+              <select
+                value={depositForm.lease_id}
+                required
+                onChange={(event) => setDepositForm((current) => ({
+                  ...current,
+                  lease_id: event.target.value,
+                }))}
+              >
+                <option value="">Select a lease</option>
+                {leases.map((lease) => (
+                  <option key={lease.id} value={lease.id}>
+                    Lease #{lease.id} · {formatMoney(lease.monthly_rent, lease.currency)}/month
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="manage-field">
+              Entry
+              <select
+                value={depositForm.entry_type}
+                onChange={(event) => setDepositForm((current) => ({
+                  ...current,
+                  entry_type: event.target.value,
+                }))}
+              >
+                <option value="charge">Additional deposit charge</option>
+                <option value="refund">Deposit refund</option>
+              </select>
+            </label>
+            <label className="manage-field">
+              Amount ({selectedDepositLease?.currency || CURRENCY_CODES[0]})
+              <input
+                type="number"
+                min={10 ** -depositPrecision}
+                step={10 ** -depositPrecision}
+                value={depositForm.amount}
+                required
+                onChange={(event) => setDepositForm((current) => ({
+                  ...current,
+                  amount: event.target.value,
+                }))}
+              />
+            </label>
+            <label className="manage-field">
+              Note
+              <input
+                value={depositForm.note}
+                maxLength={500}
+                onChange={(event) => setDepositForm((current) => ({
+                  ...current,
+                  note: event.target.value,
+                }))}
+              />
+            </label>
+            <div className="manage-actions">
+              <button className="manage-button" type="submit" disabled={depositSaving}>
+                {depositSaving ? "Saving…" : "Save ledger entry"}
+              </button>
+              <button type="button" className="manage-button is-secondary" disabled={depositSaving} onClick={() => setDepositFormOpen(false)}>
+                Cancel
+              </button>
+            </div>
+          </form>
+          </section>
+          </div>
+          )}
+        </section>
+      )}
 
       {canRecord && (
         <div className="manage-card">
           <h2>Record a payment</h2>
+          {!leasesLoading && !leaseError && leases.length > 0 && (
+            <button type="button" className="manage-button" onClick={() => {
+              setFormError("");
+              setSuccessMessage("");
+              setPaymentFormOpen(true);
+            }}>
+              Record payment
+            </button>
+          )}
 
           {leasesLoading && (
             <p className="manage-status" role="status">
@@ -223,7 +549,16 @@ function PaymentsPage() {
             </p>
           )}
 
-          {!leasesLoading && !leaseError && leases.length > 0 && (
+          {!leasesLoading && !leaseError && leases.length > 0 && paymentFormOpen && (
+            <div className="manage-dialog-backdrop">
+            <section className="manage-dialog" role="dialog" aria-modal="true" aria-labelledby="record-payment-dialog-title">
+            <div className="manage-dialog-heading">
+              <div>
+                <h2 id="record-payment-dialog-title">Record a payment</h2>
+                <p>Record a received payment against the correct lease.</p>
+              </div>
+              <button type="button" className="manage-dialog-close" aria-label="Close payment form" disabled={isSaving} onClick={() => setPaymentFormOpen(false)}>×</button>
+            </div>
             <form className="manage-form" onSubmit={handleSubmit}>
               <label className="manage-field">
                 Lease
@@ -237,21 +572,21 @@ function PaymentsPage() {
 
                   {leases.map((lease) => (
                     <option key={lease.id} value={lease.id}>
-                      {`Lease #${lease.id} — Tenant #${lease.tenant_id} — Unit #${lease.unit_id} — KSh ${formatAmount(lease.monthly_rent)}/month`}
+                      {`Lease #${lease.id} — Tenant #${lease.tenant_id} — Unit #${lease.unit_id} — ${formatMoney(lease.monthly_rent, lease.currency)}/month`}
                     </option>
                   ))}
                 </select>
               </label>
 
               <label className="manage-field">
-                Amount (KSh)
+                Amount ({currency})
                 <input
                   type="number"
                   name="amount"
                   value={form.amount}
                   onChange={handleChange}
                   min="0.01"
-                  step="0.01"
+                  step={10 ** -currencyPrecision(currency)}
                   required
                 />
               </label>
@@ -316,8 +651,13 @@ function PaymentsPage() {
                 >
                   {isSaving ? "Saving payment…" : "Record payment"}
                 </button>
+                <button type="button" className="manage-button is-secondary" disabled={isSaving} onClick={() => setPaymentFormOpen(false)}>
+                  Cancel
+                </button>
               </div>
             </form>
+            </section>
+            </div>
           )}
 
           {leasesLoading && formError && (
@@ -368,10 +708,12 @@ function PaymentsPage() {
 
                   <p>Tenant: {payment.tenant_name}</p>
                   <p>Payment date: {formatDate(payment.payment_date)}</p>
-                  <p>Amount: KSh {formatAmount(payment.amount)}</p>
+                  <p>Amount: {formatMoney(payment.amount, payment.currency)}</p>
                   <p>Method: {payment.payment_method}</p>
+                  <p>Type: {payment.payment_type}</p>
+                  <p>Provider: {payment.provider}</p>
                   <p>
-                    Reference: {payment.reference_code || "Not provided"}
+                    Reference: {payment.provider_reference || payment.reference_code || "Not provided"}
                   </p>
 
                   <span
@@ -409,6 +751,33 @@ function PaymentsPage() {
                 Next
               </button>
             </nav>
+          )}
+
+          {depositLedger.entries?.length > 0 && (
+            <section aria-label="Deposit ledger">
+              <h2>Deposit ledger</h2>
+              <ul className="manage-list">
+                {(depositLedger.balances || []).map((balance) => (
+                  <li className="manage-card" key={balance.lease_id}>
+                    <strong>Lease #{balance.lease_id}</strong>
+                    <p>
+                      Charged {formatMoney(balance.charged, balance.currency)} ·
+                      Received {formatMoney(balance.paid, balance.currency)} ·
+                      Held {formatMoney(balance.held, balance.currency)} ·
+                      Outstanding {formatMoney(balance.outstanding, balance.currency)}
+                    </p>
+                  </li>
+                ))}
+              </ul>
+              <ul className="manage-list">
+                {depositLedger.entries.map((entry) => (
+                  <li className="manage-card" key={entry.id}>
+                    <strong>Lease #{entry.lease_id} · {entry.entry_type}</strong>
+                    <p>{formatMoney(entry.amount, entry.currency)}{entry.note ? ` · ${entry.note}` : ""}</p>
+                  </li>
+                ))}
+              </ul>
+            </section>
           )}
         </>
       )}

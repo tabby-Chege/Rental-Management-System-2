@@ -20,7 +20,9 @@ import ManageTenantsPage from "./pages/ManageTenantsPage/ManageTenants";
 import ManageApplicationsPage from "./pages/ManageApplicationsPage/ManageApplicationsPage";
 import TenantDetailsPage from "./pages/TenantDetailsPage/TenantDetailsPage";
 import TenantApplicationsPage from "./pages/TenantApplicationsPage/TenantApplicationsPage";
+import MessagesPage from "./pages/MessagesPage/MessagesPage";
 import PaymentsPage from "./pages/PaymentsPage/PaymentsPage";
+import SecuritySettingsPage from "./pages/SecuritySettingsPage";
 import { getCurrentUser, getToken, logoutUser } from "./api/authAPI";
 import "./App.css";
 
@@ -41,10 +43,15 @@ function AppShellNav() {
       .catch(() => setUser(null));
   }, [token, location.pathname]);
 
-  const handleLogout = () => {
-    logoutUser();
-    setUser(null);
-    navigate("/login", { replace: true });
+  const handleLogout = async () => {
+    try {
+      await logoutUser();
+    } catch (error) {
+      console.error("Server sign-out could not revoke the refresh token.", error);
+    } finally {
+      setUser(null);
+      navigate("/login", { replace: true });
+    }
   };
 
   const isLandlord = user?.role === "landlord" || user?.role === "admin";
@@ -109,6 +116,15 @@ function AppShellNav() {
             </>
           )}
 
+          {(user?.role === "landlord" || isTenant) && (
+            <NavLink
+              to="/messages"
+              className={({ isActive }) => isActive ? "app-navigation-link is-active" : "app-navigation-link"}
+            >
+              Messages
+            </NavLink>
+          )}
+
           {isTenant && (
             <>
               <NavLink
@@ -150,6 +166,15 @@ function AppShellNav() {
           )}
 
           {user && (
+            <NavLink
+              to="/security"
+              className={({ isActive }) => isActive ? "app-navigation-link is-active" : "app-navigation-link"}
+            >
+              Security
+            </NavLink>
+          )}
+
+          {user && (
             <button type="button" className="app-navigation-link app-logout-button" onClick={handleLogout}>
               Logout
             </button>
@@ -176,8 +201,13 @@ function AppShellNav() {
             <Route path="/tenant/applications" element={<TenantApplicationsPage />} />
           </Route>
 
+          <Route element={<ProtectedRoute allowedRoles={["landlord", "tenant"]} />}>
+            <Route path="/messages" element={<MessagesPage />} />
+          </Route>
+
           <Route element={<ProtectedRoute allowedRoles={["landlord", "admin", "tenant"]} />}>
             <Route path="/payments" element={<PaymentsPage />} />
+            <Route path="/security" element={<SecuritySettingsPage />} />
           </Route>
 
           <Route path="/login" element={<Login />} />

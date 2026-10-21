@@ -1,3 +1,5 @@
+import { currencyPrecision } from "./money.js";
+
 const isNonNegativeNumber = (value) =>
   value !== "" && Number.isFinite(Number(value)) && Number(value) >= 0;
 
@@ -18,7 +20,14 @@ export function formatUnitType(unitType, bedrooms) {
 
 export function validateUnitForm(
   form,
-  { requireProperty = true, requireDetails = false } = {}
+  {
+    requireProperty = true,
+    requireDetails = false,
+    requireUnitNumber = true,
+    requireUnitType = true,
+    currency,
+    floors,
+  } = {}
 ) {
   const errors = {};
 
@@ -29,9 +38,11 @@ export function validateUnitForm(
     }
   }
 
-  if (!String(form.unit_number).trim()) errors.unit_number = "Unit number is required.";
+  if (requireUnitNumber && !String(form.unit_number ?? "").trim()) {
+    errors.unit_number = "Unit number is required.";
+  }
 
-  if (requireDetails && !String(form.unit_type ?? "").trim()) {
+  if (requireDetails && requireUnitType && !String(form.unit_type ?? "").trim()) {
     errors.unit_type = "Choose a unit type.";
   }
 
@@ -42,6 +53,30 @@ export function validateUnitForm(
   if (bedrooms && (!isNonNegativeNumber(bedrooms) || !Number.isInteger(Number(bedrooms)))) {
     errors.bedrooms = "Bedrooms must be a whole number.";
   }
+  const layout = String(form.layout ?? "").trim();
+  if (layout && layout !== "studio" && !/^\d{1,2}\+\d{1,2}$/.test(layout)) {
+    errors.layout = "Use a layout like 2+1, or choose studio.";
+  } else if (layout === "studio" && bedrooms && Number(bedrooms) !== 0) {
+    errors.layout = "A studio layout must have 0 bedrooms.";
+  } else if (layout && /^\d{1,2}\+\d{1,2}$/.test(layout) && bedrooms
+    && Number(layout.split("+")[0]) !== Number(bedrooms)) {
+    errors.layout = "Bedrooms must match the bedroom count in the layout.";
+  }
+
+  const floor = String(form.floor_number ?? "").trim();
+  if (floor && (!/^\d+$/.test(floor) || Number(floor) < 1)) {
+    errors.floor_number = "Floor must be a whole number of at least 1.";
+  } else if (floor && floors && Number(floor) > Number(floors)) {
+    errors.floor_number = "Floor cannot exceed the property's number of floors.";
+  }
+
+  const size = String(form.size ?? "").trim();
+  if (size && (!isNonNegativeNumber(size) || Number(size) === 0
+    || Number(size) !== Number(Number(size).toFixed(2)))) {
+    errors.size = "Size must be a positive number with at most two decimal places.";
+  }
+  if (size && !form.size_unit) errors.size_unit = "Choose a size unit.";
+  if (!size && form.size_unit) errors.size_unit = "Enter a size or clear the size unit.";
 
   if (requireDetails && String(form.bathrooms ?? "").trim() === "") {
     errors.bathrooms = "Enter the number of bathrooms.";
@@ -56,13 +91,14 @@ export function validateUnitForm(
   }
 
   const rent = String(form.rent_amount ?? "").trim();
-  if (requireDetails && !rent) errors.rent_amount = "Enter the monthly rent in KES.";
+  const precision = currencyPrecision(currency);
+  if (requireDetails && !rent) errors.rent_amount = "Enter the monthly rent.";
   if (rent && (!isNonNegativeNumber(rent) || Number(rent) === 0)) {
     errors.rent_amount = "Monthly rent must be greater than zero.";
-  } else if (rent && Number(rent) > 99999999.99) {
-    errors.rent_amount = "Monthly rent must not exceed KES 99,999,999.99.";
-  } else if (rent && Number(rent) !== Number(Number(rent).toFixed(2))) {
-    errors.rent_amount = "Monthly rent may have at most two decimal places.";
+  } else if (rent && Number(rent) >= 1000000000) {
+    errors.rent_amount = "Monthly rent is too large.";
+  } else if (rent && Number(rent) !== Number(Number(rent).toFixed(precision))) {
+    errors.rent_amount = `Monthly rent may have at most ${precision} decimal places for ${currency}.`;
   }
 
   const unitType = String(form.unit_type ?? "").trim();

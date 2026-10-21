@@ -22,6 +22,15 @@ function PropertyCard({ property }) {
       {location && <p className="property-card__location">{location}</p>}
       {propertyType && <span className="property-card__type">{propertyType}</span>}
 
+      {property.occupancy_summary && (
+        <p className="property-card__occupancy">
+          {property.occupancy_summary.total_units} units ·{" "}
+          {property.occupancy_summary.occupied_units} occupied ·{" "}
+          {property.occupancy_summary.reserved_units} reserved ·{" "}
+          {property.occupancy_summary.vacant_units} vacant
+        </p>
+      )}
+
       <ul className="property-card__stats">
         {bedrooms != null && <li>{bedrooms} bed</li>}
         {bathrooms != null && <li>{bathrooms} bath</li>}

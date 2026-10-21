@@ -1,4 +1,5 @@
 from datetime import date
+import re
 
 from flask import Blueprint, request
 from flask_jwt_extended import get_jwt_identity, verify_jwt_in_request
@@ -8,6 +9,7 @@ from server.extensions import db
 from server.models import Property, User
 from server.models_tenant import Tenant
 from server.models_unit_lease import Lease, Unit
+from server.occupancy import property_json, property_occupancy
 from server.pagination import get_pagination, pagination_metadata
 
 tenants_bp = Blueprint("tenants", __name__, url_prefix="/api/tenants")
@@ -15,7 +17,7 @@ tenants_bp = Blueprint("tenants", __name__, url_prefix="/api/tenants")
 MANAGER_ROLES = {"landlord", "admin"}
 # Fields a tenant may change on their own record.
 TENANT_EDITABLE = {"email", "phone"}
-MANAGER_EDITABLE = {"name", "email", "phone", "user_id"}
+MANAGER_EDITABLE = {"name", "email", "phone"}
 
 
 def error(message, status):
@@ -36,21 +38,17 @@ def clean_email(value):
     return email
 
 
-def validate_user_link(user_id, tenant=None):
-    """Return an error response if user_id cannot be linked, else None."""
-    if user_id is None:
-        return None
-    linked = (
-        db.session.get(User, user_id)
-        if isinstance(user_id, int) and not isinstance(user_id, bool)
-        else None
-    )
-    if not linked or linked.role != "tenant":
-        return error("user_id must belong to an existing user with the tenant role", 400)
-    taken = Tenant.query.filter_by(user_id=user_id).first()
-    if taken and (tenant is None or taken.id != tenant.id):
-        return error("That user account is already linked to a tenant", 409)
-    return None
+def clean_phone(value):
+    if value is None:
+        return None, None
+    if not isinstance(value, str):
+        return None, "Phone must use international E.164 format, such as +254712345678"
+    phone = value.strip()
+    if not phone:
+        return None, None
+    if not re.fullmatch(r"\+[1-9]\d{6,14}", phone):
+        return None, "Phone must use international E.164 format, such as +254712345678"
+    return phone, None
 
 
 def get_visible_tenant(user, tenant_id):
@@ -89,50 +87,6 @@ def list_tenants():
     }, 200
 
 
-@tenants_bp.route("", methods=["POST"])
-def create_tenant():
-    user = current_user()
-    if not user:
-        return error("User not found", 404)
-    if user.role not in MANAGER_ROLES:
-        return error("You do not have permission to access this resource", 403)
-
-    data = request.get_json(silent=True)
-    if not isinstance(data, dict):
-        return error("Request body must be valid JSON", 400)
-
-    raw_name = data.get("name")
-    if not isinstance(raw_name, str):
-        return error("Name is required", 400)
-    name = raw_name.strip()
-    email = clean_email(data.get("email"))
-    raw_phone = data.get("phone")
-    if raw_phone is not None and not isinstance(raw_phone, str):
-        return error("Phone must be text", 400)
-    phone = (raw_phone or "").strip() or None
-    user_id = data.get("user_id")
-
-    if not name:
-        return error("Name is required", 400)
-    if not email:
-        return error("A valid email address is required", 400)
-    if len(name) > 120 or len(email) > 120 or (phone and len(phone) > 30):
-        return error("Name, email, or phone exceeds the maximum length", 400)
-    if Tenant.query.filter_by(landlord_id=user.id, email=email).first():
-        return error("You already have a tenant with this email", 409)
-
-    problem = validate_user_link(user_id)
-    if problem:
-        return problem
-
-    tenant = Tenant(
-        landlord_id=user.id, user_id=user_id, name=name, email=email, phone=phone
-    )
-    db.session.add(tenant)
-    db.session.commit()
-    return {"message": "Tenant created", "tenant": tenant.to_dict()}, 201
-
-
 @tenants_bp.route("/me", methods=["GET"])
 def my_tenant_record():
     user = current_user()
@@ -166,7 +120,7 @@ def my_tenant_record():
         residences.append({
             "lease": lease.to_dict(),
             "unit": unit.to_dict(lease),
-            "property": prop.to_dict(),
+            "property": property_json(prop, property_occupancy([prop])[prop.id]),
             "landlord": (
                 {"name": landlord.name, "email": landlord.email}
                 if landlord
@@ -213,11 +167,9 @@ def update_my_tenant_record():
         tenant.email = email
 
     if "phone" in data:
-        if data["phone"] is not None and not isinstance(data["phone"], str):
-            return error("Phone must be text", 400)
-        phone = (data["phone"] or "").strip() or None
-        if phone and len(phone) > 30:
-            return error("Phone is too long", 400)
+        phone, phone_error = clean_phone(data["phone"])
+        if phone_error:
+            return error(phone_error, 400)
         tenant.phone = phone
 
     db.session.commit()
@@ -282,18 +234,10 @@ def update_tenant(tenant_id):
         tenant.email = email
 
     if "phone" in data:
-        if data["phone"] is not None and not isinstance(data["phone"], str):
-            return error("Phone must be text", 400)
-        phone = (data["phone"] or "").strip() or None
-        if phone and len(phone) > 30:
-            return error("Phone is too long", 400)
+        phone, phone_error = clean_phone(data["phone"])
+        if phone_error:
+            return error(phone_error, 400)
         tenant.phone = phone
-
-    if "user_id" in data:
-        problem = validate_user_link(data["user_id"], tenant)
-        if problem:
-            return problem
-        tenant.user_id = data["user_id"]
 
     db.session.commit()
     return {"message": "Tenant updated", "tenant": tenant.to_dict()}, 200

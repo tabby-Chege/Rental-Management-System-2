@@ -3,22 +3,21 @@ from datetime import date, timedelta
 from server.extensions import db
 from server.models import Payment, Property
 from server.models_unit_lease import Lease, Unit
-from tests.test_tenants import client, world, create
+from tests.test_tenants import client, world, seed_tenant
 
 
 def make_lease(client, world, owner_key="landlord", tenant_key="tenant_user"):
     """Create a property, unit, tenant, and lease for payment tests."""
     tenant_email = f"{tenant_key}@example.com"
 
-    tenant_response = create(
+    tenant = seed_tenant(
         client,
-        world[owner_key],
+        world["ids"][owner_key],
         name=f"Test {tenant_key}",
         email=tenant_email,
         user_id=world["ids"][tenant_key],
     )
-    assert tenant_response.status_code == 201
-    tenant_id = tenant_response.get_json()["tenant"]["id"]
+    tenant_id = tenant["id"]
 
     owner_id = world["ids"][owner_key]
 
@@ -227,6 +226,52 @@ def test_payment_validation_rejects_invalid_amount(client, world):
     )
 
     assert response.status_code == 400
+
+
+def test_payment_uses_fixed_point_amount_and_currency_precision(client, world):
+    lease_id = make_lease(client, world)
+    lease = db.session.get(Lease, lease_id)
+    unit = db.session.get(Unit, lease.unit_id)
+    unit.property.currency = "KWD"
+    db.session.commit()
+
+    valid = client.post(
+        "/api/payments",
+        headers=world["landlord"],
+        json={
+            "lease_id": lease_id,
+            "amount": 12.345,
+            "payment_method": "Cash",
+            "reference_code": "KWD-THREE-DECIMALS",
+        },
+    )
+    assert valid.status_code == 201
+    assert valid.get_json()["amount"] == 12.345
+    assert valid.get_json()["currency"] == "KWD"
+
+    too_precise = client.post(
+        "/api/payments",
+        headers=world["landlord"],
+        json={
+            "lease_id": lease_id,
+            "amount": 12.3456,
+            "payment_method": "Cash",
+        },
+    )
+    assert too_precise.status_code == 400
+
+    unit.property.currency = "JPY"
+    db.session.commit()
+    fractional_yen = client.post(
+        "/api/payments",
+        headers=world["landlord"],
+        json={
+            "lease_id": lease_id,
+            "amount": 12.5,
+            "payment_method": "Cash",
+        },
+    )
+    assert fractional_yen.status_code == 400
 
 
 def test_payment_list_is_paginated(client, world):

@@ -4,6 +4,7 @@ import { createLease, deleteLease, listLeases, updateLease } from "../../api/lea
 import { listTenants } from "../../api/tenantsApi";
 import { listProperties, listUnits } from "../../api/unitsAPI";
 import { validateLeaseForm } from "../../utils/leaseForm";
+import { CURRENCY_CODES, currencyPrecision, formatMoney } from "../../utils/money";
 import "../manage.css";
 
 const STATUSES = ["active", "ended", "terminated"];
@@ -16,9 +17,6 @@ const EMPTY_FORM = {
   deposit: "",
   status: "active",
 };
-
-const money = (value) =>
-  Number(value).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
 function describeUnit(unit, properties) {
   const property = properties.find((p) => p.id === unit.property_id);
@@ -34,6 +32,7 @@ function leaseToForm(lease) {
     monthly_rent: lease.monthly_rent,
     deposit: lease.deposit ?? "",
     status: lease.status,
+    currency: lease.currency,
   };
 }
 
@@ -66,6 +65,10 @@ function LeaseForm({ initial, units, properties, tenants, isEdit, submitLabel, o
   const [errors, setErrors] = useState({});
   const [submitError, setSubmitError] = useState("");
   const [isSaving, setIsSaving] = useState(false);
+  const currency =
+    units.find((unit) => String(unit.id) === String(form.unit_id))?.currency
+    || initial.currency
+    || CURRENCY_CODES[0];
 
   function handleChange(event) {
     setForm((current) => ({ ...current, [event.target.name]: event.target.value }));
@@ -73,7 +76,7 @@ function LeaseForm({ initial, units, properties, tenants, isEdit, submitLabel, o
 
   async function handleSubmit(event) {
     event.preventDefault();
-    const found = validateLeaseForm(form, { requireUnit: !isEdit });
+    const found = validateLeaseForm(form, { requireUnit: !isEdit, currency });
     setErrors(found);
     if (Object.keys(found).length > 0) return;
 
@@ -121,11 +124,11 @@ function LeaseForm({ initial, units, properties, tenants, isEdit, submitLabel, o
       <Field label="End date" error={errors.end_date}>
         <input type="date" name="end_date" value={form.end_date} onChange={handleChange} aria-invalid={invalid("end_date")} />
       </Field>
-      <Field label="Monthly rent" error={errors.monthly_rent}>
-        <input type="number" min="0" step="0.01" name="monthly_rent" value={form.monthly_rent} onChange={handleChange} aria-invalid={invalid("monthly_rent")} />
+      <Field label={`Monthly rent (${currency})`} error={errors.monthly_rent}>
+        <input type="number" min="0" step={10 ** -currencyPrecision(currency)} name="monthly_rent" value={form.monthly_rent} onChange={handleChange} aria-invalid={invalid("monthly_rent")} />
       </Field>
-      <Field label="Deposit (optional)" error={errors.deposit}>
-        <input type="number" min="0" step="0.01" name="deposit" value={form.deposit} onChange={handleChange} aria-invalid={invalid("deposit")} />
+      <Field label={`Deposit (${currency}, optional)`} error={errors.deposit}>
+        <input type="number" min="0" step={10 ** -currencyPrecision(currency)} name="deposit" value={form.deposit} onChange={handleChange} aria-invalid={invalid("deposit")} />
       </Field>
       <Field label="Status" error={errors.status}>
         <select name="status" value={form.status} onChange={handleChange}>
@@ -163,6 +166,8 @@ function LeasesPage() {
   const [tenants, setTenants] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState("");
+  const [createOpen, setCreateOpen] = useState(Boolean(searchParams.get("unit_id")));
+  const [notice, setNotice] = useState("");
   const [editingId, setEditingId] = useState(null);
   const initialForm = {
     ...EMPTY_FORM,
@@ -209,6 +214,8 @@ function LeasesPage() {
   async function handleCreate(body) {
     const created = await createLease(body);
     setLeases((current) => [created, ...current]);
+    setCreateOpen(false);
+    setNotice("Lease created and added to your lease list.");
   }
 
   async function handleUpdate(id, body) {
@@ -237,58 +244,96 @@ function LeasesPage() {
     }
   }
 
+  const editingLease = leases.find((lease) => lease.id === editingId);
   const canAdd = units.length > 0 && tenants.length > 0;
 
   return (
     <section className="manage-page">
-      <h1>Leases</h1>
-
-      <div className="manage-card">
-        <h2>Add a lease</h2>
-        {isLoading && <p className="manage-status">Loading…</p>}
-        {!isLoading && units.length === 0 && (
-          <p className="manage-status">Add a unit first on the Units page.</p>
-        )}
-        {!isLoading && tenants.length === 0 && (
-          <p className="manage-status">Add a tenant first on the Tenants page.</p>
-        )}
+      <header className="manage-page-heading">
+        <div>
+          <h1>Leases</h1>
+          <p className="manage-status">Review current rental agreements and keep lease terms up to date.</p>
+        </div>
         {!isLoading && canAdd && (
-          <LeaseForm
-            key={searchParams.toString()}
-            initial={initialForm}
-            units={units}
-            properties={properties}
-            tenants={tenants}
-            submitLabel="Add lease"
-            onSubmit={handleCreate}
-          />
+          <button type="button" className="manage-button" onClick={() => {
+            setError("");
+            setNotice("");
+            setCreateOpen(true);
+          }}>
+            Add lease
+          </button>
         )}
-      </div>
+      </header>
+
+      {isLoading && <p className="manage-status">Loading…</p>}
+      {!isLoading && units.length === 0 && (
+        <p className="manage-status">Add a unit first on the Units page.</p>
+      )}
+      {!isLoading && units.length > 0 && tenants.length === 0 && (
+        <p className="manage-status">A tenant must apply for a property before a lease can be created.</p>
+      )}
+
+      {createOpen && canAdd && (
+        <div className="manage-dialog-backdrop">
+          <section className="manage-dialog" role="dialog" aria-modal="true" aria-labelledby="lease-dialog-title">
+            <div className="manage-dialog-heading">
+              <div>
+                <h2 id="lease-dialog-title">Add a lease</h2>
+                <p>Choose a unit and tenant, then enter the agreement terms.</p>
+              </div>
+              <button type="button" className="manage-dialog-close" aria-label="Close lease form" onClick={() => setCreateOpen(false)}>×</button>
+            </div>
+            <LeaseForm
+              key={searchParams.toString()}
+              initial={initialForm}
+              units={units}
+              properties={properties}
+              tenants={tenants}
+              submitLabel="Add lease"
+              onSubmit={handleCreate}
+              onCancel={() => setCreateOpen(false)}
+            />
+          </section>
+        </div>
+      )}
 
       {error && (
         <p className="manage-error" role="alert">
           {error}
         </p>
       )}
+      {notice && <p className="manage-status" role="status">{notice}</p>}
       {!isLoading && leases.length === 0 && !error && (
         <p className="manage-status">No leases yet.</p>
+      )}
+
+      {editingLease && (
+        <div className="manage-dialog-backdrop">
+          <section className="manage-dialog" role="dialog" aria-modal="true" aria-labelledby="edit-lease-dialog-title">
+            <div className="manage-dialog-heading">
+              <div>
+                <h2 id="edit-lease-dialog-title">Edit lease</h2>
+                <p>Update the tenant and agreement terms for this lease.</p>
+              </div>
+              <button type="button" className="manage-dialog-close" aria-label="Close lease editor" onClick={() => setEditingId(null)}>×</button>
+            </div>
+            <LeaseForm
+              initial={leaseToForm(editingLease)}
+              units={units}
+              properties={properties}
+              tenants={tenants}
+              isEdit
+              submitLabel="Save changes"
+              onSubmit={(body) => handleUpdate(editingLease.id, body)}
+              onCancel={() => setEditingId(null)}
+            />
+          </section>
+        </div>
       )}
 
       <ul className="manage-list">
         {leases.map((lease) => (
           <li key={lease.id} className="manage-card">
-            {editingId === lease.id ? (
-              <LeaseForm
-                initial={leaseToForm(lease)}
-                units={units}
-                properties={properties}
-                tenants={tenants}
-                isEdit
-                submitLabel="Save changes"
-                onSubmit={(body) => handleUpdate(lease.id, body)}
-                onCancel={() => setEditingId(null)}
-              />
-            ) : (
               <>
                 <div>
                   <strong>{unitLabel(lease.unit_id)}</strong>
@@ -300,7 +345,7 @@ function LeasesPage() {
                     {lease.start_date} to {lease.end_date}
                   </p>
                   <p>
-                    Rent {money(lease.monthly_rent)} per month, deposit {money(lease.deposit)}
+                    Rent {formatMoney(lease.monthly_rent, lease.currency)} per month, deposit {formatMoney(lease.deposit, lease.currency)}
                   </p>
                 </div>
                 <div className="manage-actions">
@@ -329,7 +374,6 @@ function LeasesPage() {
                   </button>
                 </div>
               </>
-            )}
           </li>
         ))}
       </ul>

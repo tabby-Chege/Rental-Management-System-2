@@ -1,29 +1,31 @@
 from datetime import date
 
-from tests.test_tenants import client, world, create  # noqa: F401  (fixtures + helper)
+from tests.test_tenants import client, world, seed_tenant  # noqa: F401
 from server.extensions import db
 from server.models import Property
 from server.models_unit_lease import Lease, Unit
 
 
 def test_landlord_deletes_own_tenant(client, world):
-    tid = create(client, world["landlord"]).get_json()["tenant"]["id"]
+    tid = seed_tenant(client, world["ids"]["landlord"])["id"]
     res = client.delete(f"/api/tenants/{tid}", headers=world["landlord"])
     assert res.status_code == 200
     assert client.get(f"/api/tenants/{tid}", headers=world["landlord"]).status_code == 404
 
 
 def test_other_landlord_cannot_delete(client, world):
-    tid = create(client, world["landlord"]).get_json()["tenant"]["id"]
+    tid = seed_tenant(client, world["ids"]["landlord"])["id"]
     res = client.delete(f"/api/tenants/{tid}", headers=world["other"])
     assert res.status_code == 404
     assert client.get(f"/api/tenants/{tid}", headers=world["landlord"]).status_code == 200
 
 
 def test_tenant_role_cannot_delete(client, world):
-    tid = create(
-        client, world["landlord"], user_id=world["ids"]["tenant_user"]
-    ).get_json()["tenant"]["id"]
+    tid = seed_tenant(
+        client,
+        world["ids"]["landlord"],
+        user_id=world["ids"]["tenant_user"],
+    )["id"]
     res = client.delete(f"/api/tenants/{tid}", headers=world["tenant"])
     assert res.status_code == 403
 
@@ -33,7 +35,7 @@ def test_delete_requires_login(client):
 
 
 def test_delete_blocked_when_tenant_has_leases(client, world):
-    tid = create(client, world["landlord"]).get_json()["tenant"]["id"]
+    tid = seed_tenant(client, world["ids"]["landlord"])["id"]
     property_item = Property(
         owner_id=world["ids"]["landlord"],
         name="Test Property",

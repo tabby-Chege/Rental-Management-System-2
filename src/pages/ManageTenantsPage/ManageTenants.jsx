@@ -1,13 +1,13 @@
 import { useEffect, useState } from "react";
 import {
-  createTenant,
   deleteTenant,
   listTenants,
   updateTenant,
 } from "../../api/tenantsApi";
+import { makeInternationalPhone, phoneParts, PHONE_COUNTRIES } from "../../utils/money";
 import "./../ManagePropertiesPage/ManageProperties.css";
 
-const EMPTY_FORM = { name: "", email: "", phone: "" };
+const EMPTY_FORM = { name: "", email: "", phone_code: "+254", phone_number: "" };
 const PER_PAGE = 10;
 
 function ManageTenantsPage() {
@@ -59,21 +59,20 @@ function ManageTenantsPage() {
 
   async function handleSubmit(event) {
     event.preventDefault();
+    if (!editingId) return;
     setSaving(true);
     setFormError("");
     try {
-      if (editingId) {
-        const result = await updateTenant(editingId, form);
-        setTenants((current) =>
-          current.map((tenant) =>
-            tenant.id === result.tenant.id ? result.tenant : tenant
-          )
-        );
-      } else {
-        await createTenant(form);
-        setPage(1);
-        setReloadCount((count) => count + 1);
-      }
+      const result = await updateTenant(editingId, {
+          name: form.name,
+          email: form.email,
+          phone: makeInternationalPhone(form.phone_code, form.phone_number),
+      });
+      setTenants((current) =>
+        current.map((tenant) =>
+          tenant.id === result.tenant.id ? result.tenant : tenant
+        )
+      );
       resetForm();
     } catch (error) {
       setFormError(error.message);
@@ -101,11 +100,12 @@ function ManageTenantsPage() {
     <section className="manage-properties">
       <h1>My tenants</h1>
       <p className="manage-intro">
-        Maintain tenant contact records for the properties you manage.
+        Tenants are added to your list through applications or leases. You can
+        update contact details for existing records.
       </p>
 
-      <form className="manage-form" onSubmit={handleSubmit}>
-        <h2>{editingId ? "Edit tenant" : "Add a tenant"}</h2>
+      {editingId && <form className="manage-form" onSubmit={handleSubmit}>
+        <h2>Edit tenant</h2>
         <label>
           Name *
           <input
@@ -131,19 +131,34 @@ function ManageTenantsPage() {
         </label>
         <label>
           Phone
-          <input
-            type="tel"
-            value={form.phone}
-            onChange={(event) =>
-              setForm((current) => ({ ...current, phone: event.target.value }))
-            }
-            maxLength={30}
-          />
+          <div className="manage-form-row">
+            <select
+              aria-label="Phone country code"
+              value={form.phone_code}
+              onChange={(event) =>
+                setForm((current) => ({ ...current, phone_code: event.target.value }))
+              }
+            >
+              {PHONE_COUNTRIES.map(({ code, name, dialCode }) => (
+                <option key={code} value={dialCode}>{name} ({dialCode})</option>
+              ))}
+              <option value="custom">Other (enter full international number)</option>
+            </select>
+            <input
+              type="tel"
+              value={form.phone_number}
+              onChange={(event) =>
+                setForm((current) => ({ ...current, phone_number: event.target.value }))
+              }
+              maxLength={20}
+              placeholder={form.phone_code === "custom" ? "+... full number" : "712 345 678"}
+            />
+          </div>
         </label>
         {formError && <p className="manage-error" role="alert">{formError}</p>}
         <div className="manage-actions">
           <button className="manage-button" type="submit" disabled={saving}>
-            {saving ? "Saving..." : editingId ? "Save changes" : "Add tenant"}
+            {saving ? "Saving..." : "Save changes"}
           </button>
           {editingId && (
             <button
@@ -155,7 +170,7 @@ function ManageTenantsPage() {
             </button>
           )}
         </div>
-      </form>
+      </form>}
 
       {loading && <p className="manage-status">Loading tenants...</p>}
       {loadError && (
@@ -187,10 +202,12 @@ function ManageTenantsPage() {
                   type="button"
                   onClick={() => {
                     setEditingId(tenant.id);
+                    const parsedPhone = phoneParts(tenant.phone);
                     setForm({
                       name: tenant.name,
                       email: tenant.email,
-                      phone: tenant.phone || "",
+                      phone_code: parsedPhone.dialCode,
+                      phone_number: parsedPhone.number,
                     });
                     setFormError("");
                   }}

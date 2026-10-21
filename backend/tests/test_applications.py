@@ -1,12 +1,19 @@
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 
 from server.extensions import db
+from server.models_application import Application
 from server.models_tenant import Tenant
 from server.models_unit_lease import Lease
 from tests.test_tenants import client, world  # noqa: F401 (shared fixtures)
 
 
-def create_unit(client, headers, name="Application property", rent_amount=1200):
+def create_unit(
+    client,
+    headers,
+    name="Application property",
+    rent_amount=1200,
+    reservation_hold_hours=48,
+):
     property_response = client.post(
         "/api/properties",
         headers=headers,
@@ -15,6 +22,7 @@ def create_unit(client, headers, name="Application property", rent_amount=1200):
             "address": "1 Main Street",
             "city": "Nairobi",
             "state": "Nairobi",
+            "reservation_hold_hours": reservation_hold_hours,
         },
     )
     assert property_response.status_code == 201
@@ -31,7 +39,7 @@ def create_unit(client, headers, name="Application property", rent_amount=1200):
 def apply(client, headers, unit_id, **values):
     body = {
         "unit_id": unit_id,
-        "move_in_date": "2026-11-01",
+        "move_in_date": (date.today() + timedelta(days=30)).isoformat(),
         "message": "I would like to rent this unit.",
     }
     body.update(values)
@@ -54,6 +62,9 @@ def test_tenant_applies_and_sees_only_own_applications(client, world):
     assert application["unit"]["id"] == unit_id
     assert application["property"]["name"] == "Application property"
     assert application["applicant"]["email"] == "tom@x.com"
+    assert application["applicant_profile"]["full_name"] == "Tom"
+    assert application["applicant_profile"]["employment_status"] == "employed"
+    assert application["applicant_profile"]["document_ids"] == []
 
     listed = client.get("/api/applications", headers=world["tenant"])
     assert listed.status_code == 200
@@ -139,14 +150,17 @@ def test_tenant_cannot_apply_to_a_unit_with_an_active_lease(client, world):
     assert "not available" in response.get_json()["error"]
 
 
-def test_landlord_approval_creates_tenant_and_returns_lease_prefill(client, world):
+def test_payment_confirmation_creates_the_lease_after_reservation(client, world):
     unit_id = create_unit(client, world["landlord"], rent_amount=1450)
     application = apply(client, world["tenant"], unit_id).get_json()["application"]
 
     approved = client.patch(
         f"/api/applications/{application['id']}",
         headers=world["landlord"],
-        json={"status": "approved"},
+        json={
+            "status": "approved",
+            "reason": "The requested move-in date is available.",
+        },
     )
     assert approved.status_code == 200
     payload = approved.get_json()
@@ -154,34 +168,64 @@ def test_landlord_approval_creates_tenant_and_returns_lease_prefill(client, worl
     assert tenant["user_id"] == world["ids"]["tenant_user"]
     assert tenant["landlord_id"] == world["ids"]["landlord"]
     assert payload["application"]["tenant_id"] == tenant["id"]
-    assert payload["lease_prefill"] == {
-        "tenant_id": tenant["id"],
-        "unit_id": unit_id,
-        "start_date": "2026-11-01",
-        "monthly_rent": 1450.0,
-    }
+    assert payload["application"]["status"] == "approved"
+    assert payload["application"]["payment_due_at"]
+    listed_tenants = client.get(
+        "/api/tenants", headers=world["landlord"]
+    ).get_json()["tenants"]
+    assert tenant["id"] in {record["id"] for record in listed_tenants}
     assert client.get("/api/tenants/me", headers=world["tenant"]).get_json()[
         "tenant"
     ]["id"] == tenant["id"]
 
-    lease_prefill = payload["lease_prefill"]
-    lease_prefill["end_date"] = "2027-10-31"
-    lease_prefill["deposit"] = 500
-    lease = client.post(
+    blocked_lease = client.post(
         "/api/leases",
         headers=world["landlord"],
-        json=lease_prefill,
+        json={
+            "tenant_id": tenant["id"],
+            "unit_id": unit_id,
+            "start_date": application["move_in_date"],
+            "end_date": (
+                date.fromisoformat(application["move_in_date"])
+                + timedelta(days=365)
+            ).isoformat(),
+            "monthly_rent": 1450,
+            "deposit": 500,
+        },
     )
-    assert lease.status_code == 201
-    assert lease.get_json()["tenant_id"] == tenant["id"]
-    assert lease.get_json()["unit_id"] == unit_id
+    assert blocked_lease.status_code == 409
 
-    repeated_decision = client.patch(
-        f"/api/applications/{application['id']}",
+    confirmation_body = {
+        "lease_end_date": (
+            date.fromisoformat(application["move_in_date"])
+            + timedelta(days=365)
+        ).isoformat(),
+        "amount": 1450,
+        "payment_method": "Bank Transfer",
+        "reference_code": "BANK-REF-001",
+    }
+    confirmation = client.post(
+        f"/api/applications/{application['id']}/confirm-payment",
         headers=world["landlord"],
-        json={"status": "approved"},
+        json=confirmation_body,
     )
-    assert repeated_decision.status_code == 409
+    assert confirmation.status_code == 201
+    confirmation_payload = confirmation.get_json()
+    assert confirmation_payload["lease"]["tenant_id"] == tenant["id"]
+    assert confirmation_payload["lease"]["unit_id"] == unit_id
+    assert confirmation_payload["payment"]["status"] == "Completed"
+    assert confirmation_payload["application"]["status"] == "paid"
+
+    repeated_confirmation = client.post(
+        f"/api/applications/{application['id']}/confirm-payment",
+        headers=world["landlord"],
+        json=confirmation_body,
+    )
+    assert repeated_confirmation.status_code == 200
+    assert (
+        repeated_confirmation.get_json()["lease"]["id"]
+        == confirmation_payload["lease"]["id"]
+    )
 
 
 def test_tenant_cannot_decide_application_and_decline_does_not_create_tenant(
@@ -194,9 +238,134 @@ def test_tenant_cannot_decide_application_and_decline_does_not_create_tenant(
     assert client.patch(
         endpoint, headers=world["tenant"], json={"status": "approved"}
     ).status_code == 403
+    missing_reason = client.patch(
+        endpoint,
+        headers=world["landlord"],
+        json={"status": "declined"},
+    )
+    assert missing_reason.status_code == 400
     declined = client.patch(
-        endpoint, headers=world["landlord"], json={"status": "declined"}
+        endpoint,
+        headers=world["landlord"],
+        json={"status": "declined", "reason": "The move-in date is unavailable."},
     )
     assert declined.status_code == 200
     assert declined.get_json()["application"]["tenant_id"] is None
+    assert (
+        declined.get_json()["application"]["decision_reason"]
+        == "The move-in date is unavailable."
+    )
     assert client.get("/api/tenants/me", headers=world["tenant"]).status_code == 404
+
+
+def test_waitlist_offer_deadline_notifications_and_expiry(client, world):
+    unit_id = create_unit(client, world["landlord"], reservation_hold_hours=72)
+    first = apply(client, world["tenant"], unit_id).get_json()["application"]
+    second = apply(client, world["tenant2"], unit_id).get_json()["application"]
+    assert second["status"] == "pending"
+
+    approval = client.patch(
+        f"/api/applications/{first['id']}",
+        headers=world["landlord"],
+        json={"status": "approved", "reason": "The application is complete."},
+    )
+    assert approval.status_code == 200
+    assert approval.get_json()["application"]["property"]["reservation_hold_hours"] == 72
+
+    queued = client.get("/api/applications", headers=world["tenant2"]).get_json()[
+        "applications"
+    ][0]
+    assert queued["status"] == "waitlisted"
+
+    with client.application.app_context():
+        application = db.session.get(Application, first["id"])
+        application.payment_due_at = datetime.now(timezone.utc) - timedelta(minutes=1)
+        db.session.commit()
+
+    reserved_units = client.get(
+        "/api/units/public?availability=reserved"
+    ).get_json()["units"]
+    assert [unit["id"] for unit in reserved_units] == [unit_id]
+
+    offered = client.get("/api/applications", headers=world["tenant2"]).get_json()[
+        "applications"
+    ][0]
+    assert offered["status"] == "offered"
+    assert offered["payment_due_at"]
+
+    with client.application.app_context():
+        application = db.session.get(Application, second["id"])
+        application.payment_due_at = datetime.now(timezone.utc) + timedelta(hours=12)
+        db.session.commit()
+
+    notifications = client.get(
+        "/api/notifications", headers=world["tenant2"]
+    ).get_json()["notifications"]
+    notification_types = {item["notification_type"] for item in notifications}
+    assert "waitlist_offer" in notification_types
+    assert "reservation_reminder" in notification_types
+
+    notification = notifications[0]
+    read = client.patch(
+        f"/api/notifications/{notification['id']}/read",
+        headers=world["tenant2"],
+    )
+    assert read.status_code == 200
+    assert read.get_json()["notification"]["read_at"]
+
+    late_payment = client.post(
+        f"/api/applications/{first['id']}/confirm-payment",
+        headers=world["landlord"],
+        json={
+            "lease_end_date": "2027-10-31",
+            "amount": 1200,
+            "payment_method": "Bank Transfer",
+        },
+    )
+    assert late_payment.status_code == 409
+
+
+def test_landlord_can_extend_an_active_reservation_deadline(client, world):
+    unit_id = create_unit(client, world["landlord"])
+    application = apply(client, world["tenant"], unit_id).get_json()["application"]
+    approval = client.patch(
+        f"/api/applications/{application['id']}",
+        headers=world["landlord"],
+        json={"status": "approved", "reason": "The application is complete."},
+    )
+    original_due = datetime.fromisoformat(
+        approval.get_json()["application"]["payment_due_at"]
+    )
+
+    extended = client.post(
+        f"/api/applications/{application['id']}/extend-deadline",
+        headers=world["landlord"],
+        json={"additional_hours": 24},
+    )
+    assert extended.status_code == 200
+    new_due = datetime.fromisoformat(
+        extended.get_json()["application"]["payment_due_at"]
+    )
+    assert new_due - original_due == timedelta(hours=24)
+
+
+def test_reservation_actions_are_restricted_to_the_property_owner(client, world):
+    unit_id = create_unit(client, world["landlord"])
+    application = apply(client, world["tenant"], unit_id).get_json()["application"]
+    approval = client.patch(
+        f"/api/applications/{application['id']}",
+        headers=world["landlord"],
+        json={"status": "approved", "reason": "The application is complete."},
+    )
+    assert approval.status_code == 200
+
+    assert client.post(
+        f"/api/applications/{application['id']}/extend-deadline",
+        headers=world["tenant"],
+        json={"additional_hours": 24},
+    ).status_code == 403
+    assert client.post(
+        f"/api/applications/{application['id']}/confirm-payment",
+        headers=world["tenant"],
+        json={},
+    ).status_code == 403

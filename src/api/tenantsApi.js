@@ -1,12 +1,10 @@
-import { getToken } from "./authAPI.js";
+import { authenticatedFetch } from "./authAPI.js";
 
 async function request(path, options = {}) {
-  const token = getToken();
-  const response = await fetch(`/api/tenants${path}`, {
+  const response = await authenticatedFetch(`/api/tenants${path}`, {
     ...options,
     headers: {
       "Content-Type": "application/json",
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
       ...options.headers,
     },
   });
@@ -43,10 +41,6 @@ export async function getMyTenant() {
 
 export async function updateMyTenant(values) {
   return request("/me", { method: "PUT", body: JSON.stringify(values) });
-}
-
-export async function createTenant(values) {
-  return request("", { method: "POST", body: JSON.stringify(values) });
 }
 
 export async function updateTenant(id, values) {

@@ -1,5 +1,7 @@
 import math
 from datetime import date
+import re
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from flask import Blueprint, request
 from flask_jwt_extended import get_jwt_identity, jwt_required
@@ -7,20 +9,43 @@ from sqlalchemy import exists, or_
 
 from server.extensions import db
 from server.models import Property, User
-from server.models_unit_lease import Lease, Unit, current_leases
+from server.models_communications import PropertyConversation
+from server.models_application import Application, RESERVED_APPLICATION_STATUSES
+from server.models_unit_lease import Lease, Unit
+from server.money import currency_precision, parse_money
+from server.occupancy import property_json, property_occupancy, unit_occupancy
 from server.pagination import get_pagination, pagination_metadata
+from server.reservations import process_reservations
+from server.unit_validation import validate_unit_data
 
 
 properties_bp = Blueprint("properties", __name__, url_prefix="/api/properties")
 
-REQUIRED_FIELDS = ["name", "address", "city", "state"]
-OPTIONAL_FIELDS = ["zip_code", "description"]
+REQUIRED_FIELDS = ["name", "address_line", "city"]
+OPTIONAL_FIELDS = [
+    "country", "region", "postal_code", "time_zone", "currency",
+    "rental_type", "subtype", "floors", "reservation_hold_hours", "description",
+]
+LEGACY_FIELDS = {
+    "address": "address_line",
+    "state": "region",
+    "zip_code": "postal_code",
+}
 MAX_LENGTHS = {
     "name": 120,
-    "address": 255,
+    "address_line": 255,
     "city": 100,
-    "state": 100,
-    "zip_code": 20,
+    "country": 2,
+    "region": 100,
+    "postal_code": 20,
+    "time_zone": 64,
+    "currency": 3,
+    "rental_type": 20,
+    "subtype": 30,
+}
+RENTAL_TYPES = {"multi_unit", "whole_property"}
+PROPERTY_SUBTYPES = {
+    "apartment_block", "bungalow", "maisonette", "villa", "townhouse", "commercial",
 }
 
 
@@ -66,6 +91,14 @@ def clean_payload(data, require_all):
     Returns (cleaned_dict, error_message). Only known fields are kept, so a
     client can never set owner_id, id or created_at.
     """
+    data = dict(data)
+    legacy_address_payload = "address" in data
+    for legacy_name, current_name in LEGACY_FIELDS.items():
+        if legacy_name in data:
+            if current_name in data:
+                return None, f"Send either {legacy_name} or {current_name}, not both"
+            data[current_name] = data.pop(legacy_name)
+
     cleaned = {}
 
     for field in REQUIRED_FIELDS + OPTIONAL_FIELDS:
@@ -74,18 +107,69 @@ def clean_payload(data, require_all):
 
         value = data[field]
 
-        if value is not None and not isinstance(value, str):
-            return None, f"{field} must be text"
-
-        value = value.strip() if value else value
+        if field in {"floors", "reservation_hold_hours"}:
+            if isinstance(value, bool) or not isinstance(value, int):
+                return None, f"{field} must be a whole number"
+        else:
+            if value is not None and not isinstance(value, str):
+                return None, f"{field} must be text"
+            value = value.strip() if value else value
 
         if field in REQUIRED_FIELDS and not value:
             return None, f"{field} cannot be empty"
 
-        if value and len(value) > MAX_LENGTHS.get(field, 10_000):
+        if value and isinstance(value, str) and len(value) > MAX_LENGTHS.get(field, 10_000):
             return None, f"{field} is too long"
 
-        cleaned[field] = value or None
+        cleaned[field] = (
+            value
+            if field in {"floors", "reservation_hold_hours"}
+            else (value or None)
+        )
+
+    if require_all:
+        if legacy_address_payload:
+            cleaned.setdefault("country", "KE")
+            cleaned.setdefault("time_zone", "Africa/Nairobi")
+            cleaned.setdefault("currency", "KES")
+        else:
+            missing_global_fields = {
+                "country", "time_zone", "currency",
+            } - cleaned.keys()
+            if missing_global_fields:
+                return None, (
+                    "Missing required property fields: "
+                    + ", ".join(sorted(missing_global_fields))
+                )
+
+    if "country" in cleaned and not re.fullmatch(r"[A-Z]{2}", cleaned["country"] or ""):
+        return None, "country must be a two-letter uppercase country code"
+    if "currency" in cleaned and currency_precision(cleaned["currency"]) is None:
+        return None, "currency must be a valid ISO 4217 code"
+    if "time_zone" in cleaned:
+        try:
+            ZoneInfo(cleaned["time_zone"])
+        except (TypeError, ValueError, ZoneInfoNotFoundError):
+            return None, "time_zone must be a valid IANA time zone"
+
+    if "rental_type" in cleaned and cleaned["rental_type"] not in RENTAL_TYPES:
+        return None, "rental_type must be multi_unit or whole_property"
+    if "subtype" in cleaned and cleaned["subtype"] not in PROPERTY_SUBTYPES:
+        return None, "subtype must be a supported property type"
+    if "floors" in cleaned:
+        value = cleaned["floors"]
+        if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+            return None, "floors must be a whole number of at least 1"
+    if "reservation_hold_hours" in cleaned:
+        value = cleaned["reservation_hold_hours"]
+        if not 1 <= value <= 720:
+            return None, "reservation_hold_hours must be between 1 and 720"
+
+    if require_all:
+        cleaned.setdefault("rental_type", "multi_unit")
+        cleaned.setdefault("subtype", "apartment_block")
+        cleaned.setdefault("floors", 1)
+        cleaned.setdefault("reservation_hold_hours", 48)
 
     if require_all:
         missing = [f for f in REQUIRED_FIELDS if f not in cleaned]
@@ -139,14 +223,41 @@ def list_properties():
         page=page, per_page=per_page, error_out=False
     )
 
+    summaries = property_occupancy(result.items)
     return {
-        "properties": [prop.to_dict() for prop in result.items],
+        "properties": [
+            property_json(prop, summaries[prop.id]) for prop in result.items
+        ],
         "pagination": pagination_metadata(result),
+    }, 200
+
+
+@properties_bp.route("/summary", methods=["GET"])
+@jwt_required()
+def get_portfolio_summary():
+    user = get_current_user()
+    if not user:
+        return {"error": "User not found"}, 404
+    properties = owned_properties_query(user).all()
+    summaries = property_occupancy(properties)
+    totals = {
+        "total_units": 0,
+        "occupied_units": 0,
+        "reserved_units": 0,
+        "vacant_units": 0,
+    }
+    for summary in summaries.values():
+        for field in totals:
+            totals[field] += summary[field]
+    return {
+        "property_count": len(properties),
+        "occupancy_summary": totals,
     }, 200
 
 
 @properties_bp.route("/public", methods=["GET"])
 def list_public_properties():
+    process_reservations()
     pagination, error = get_pagination()
     if error:
         return {"error": error}, 400
@@ -206,13 +317,18 @@ def list_public_properties():
         if available.lower() not in {"true", "false"}:
             return {"error": "available must be true or false"}, 400
         if available.lower() == "true":
+            approved_application = exists().where(
+                Application.unit_id == Unit.id,
+                Application.status.in_(RESERVED_APPLICATION_STATUSES),
+            )
             unit_filter = unit_filter.filter(
                 ~exists().where(
                     Lease.unit_id == Unit.id,
                     Lease.status == "active",
                     Lease.start_date <= date.today(),
                     Lease.end_date >= date.today(),
-                )
+                ),
+                ~approved_application,
             )
     if any(value is not None for value in (min_rent, max_rent, bedrooms, available)):
         query = query.filter(unit_filter.exists())
@@ -234,6 +350,10 @@ def list_public_properties():
                     Lease.start_date <= date.today(),
                     Lease.end_date >= date.today(),
                 ),
+                ~exists().where(
+                    Application.unit_id == Unit.id,
+                    Application.status.in_(RESERVED_APPLICATION_STATUSES),
+                ),
             )
             .distinct()
             .all()
@@ -241,10 +361,11 @@ def list_public_properties():
         for property_id, bedrooms in available_bedrooms:
             bedroom_counts[property_id].add(bedrooms)
 
+    summaries = property_occupancy(properties)
     return {
         "properties": [
             {
-                **prop.to_dict(),
+                **property_json(prop, summaries[prop.id]),
                 "available_bedroom_counts": (
                     sorted(count for count in bedroom_counts[prop.id] if count is not None)
                     + ([None] if None in bedroom_counts[prop.id] else [])
@@ -261,7 +382,8 @@ def get_public_property(property_id):
     prop = db.session.get(Property, property_id)
     if not prop:
         return {"error": "Property not found"}, 404
-    return {"property": prop.to_dict()}, 200
+    summary = property_occupancy([prop])[prop.id]
+    return {"property": property_json(prop, summary)}, 200
 
 
 @properties_bp.route("/public/<int:property_id>/units", methods=["GET"])
@@ -285,9 +407,15 @@ def list_public_property_units(property_id):
     result = units_query.order_by(Unit.unit_number, Unit.id).paginate(
         page=page, per_page=per_page, error_out=False
     )
-    leases = current_leases([unit.id for unit in result.items])
+    occupancy = unit_occupancy(unit.id for unit in result.items)
     return {
-        "units": [unit.to_dict(leases.get(unit.id)) for unit in result.items],
+        "units": [
+            unit.to_dict(
+                occupancy[unit.id]["lease"],
+                occupancy[unit.id]["is_reserved"],
+            )
+            for unit in result.items
+        ],
         "pagination": pagination_metadata(result),
     }, 200
 
@@ -305,20 +433,47 @@ def create_property():
     if not isinstance(data, dict):
         return {"error": "Request body must be valid JSON"}, 400
 
+    whole_unit_data = data.pop("whole_unit", None)
     cleaned, error = clean_payload(data, require_all=True)
 
     if error:
         return {"error": error}, 400
 
+    rental_type = cleaned["rental_type"]
+    if rental_type == "whole_property":
+        if not isinstance(whole_unit_data, dict):
+            return {"error": "whole_unit details are required for a whole property"}, 400
+        unit_fields = set(whole_unit_data)
+        missing = {"bedrooms", "bathrooms", "rent_amount"} - unit_fields
+        if missing:
+            return {
+                "error": "Missing required whole_unit fields: " + ", ".join(sorted(missing))
+            }, 400
+        if "unit_number" in unit_fields:
+            return {"error": "whole_unit unit_number is assigned automatically"}, 400
+        unit_data, unit_error = validate_unit_data(
+            whole_unit_data,
+            currency=cleaned["currency"],
+            floors=cleaned["floors"],
+            defaults={"unit_number": "Entire property", "floor_number": 1},
+        )
+        if unit_error:
+            return {"error": f"whole_unit: {unit_error}"}, 400
+    elif whole_unit_data is not None:
+        return {"error": "whole_unit is only valid for whole_property rentals"}, 400
+
     # The owner is always the logged-in user, never taken from the request.
     prop = Property(owner_id=user.id, **cleaned)
 
     db.session.add(prop)
+    if rental_type == "whole_property":
+        db.session.flush()
+        db.session.add(Unit(property_id=prop.id, **unit_data))
     db.session.commit()
 
     return {
         "message": "Property created successfully",
-        "property": prop.to_dict(),
+        "property": property_json(prop, property_occupancy([prop])[prop.id]),
     }, 201
 
 
@@ -335,7 +490,8 @@ def get_property(property_id):
     if not prop:
         return {"error": "Property not found"}, 404
 
-    return {"property": prop.to_dict()}, 200
+    summary = property_occupancy([prop])[prop.id]
+    return {"property": property_json(prop, summary)}, 200
 
 
 @properties_bp.route("/<int:property_id>", methods=["PUT"])
@@ -356,19 +512,107 @@ def update_property(property_id):
     if not isinstance(data, dict):
         return {"error": "Request body must be valid JSON"}, 400
 
+    whole_unit_data = data.pop("whole_unit", None)
     cleaned, error = clean_payload(data, require_all=False)
 
     if error:
         return {"error": error}, 400
 
+    changing_to_whole = (
+        cleaned.get("rental_type") == "whole_property"
+        and prop.rental_type != "whole_property"
+    )
+    if "rental_type" in cleaned and cleaned["rental_type"] != prop.rental_type:
+        if Unit.query.filter_by(property_id=prop.id).first():
+            return {
+                "error": "Rental type cannot change after units have been created"
+            }, 409
+        if cleaned["rental_type"] != "whole_property":
+            return {"error": "A whole property cannot be changed to multi-unit"}, 409
+        if not isinstance(whole_unit_data, dict):
+            return {"error": "whole_unit details are required when changing to a whole property"}, 400
+        missing = {"bedrooms", "bathrooms", "rent_amount"} - whole_unit_data.keys()
+        if missing:
+            return {
+                "error": "Missing required whole_unit fields: " + ", ".join(sorted(missing))
+            }, 400
+        if "unit_number" in whole_unit_data:
+            return {"error": "whole_unit unit_number is assigned automatically"}, 400
+        unit_data, unit_error = validate_unit_data(
+            whole_unit_data,
+            currency=cleaned.get("currency", prop.currency),
+            floors=cleaned.get("floors", prop.floors),
+            defaults={"unit_number": "Entire property", "floor_number": 1},
+        )
+        if unit_error:
+            return {"error": f"whole_unit: {unit_error}"}, 400
+    elif whole_unit_data is not None and prop.rental_type != "whole_property":
+        return {"error": "whole_unit details are only valid for whole properties"}, 400
+    elif whole_unit_data is not None:
+        if "unit_number" in whole_unit_data:
+            return {"error": "whole_unit unit_number cannot be changed"}, 400
+        whole_unit = Unit.query.filter_by(property_id=prop.id).first()
+        if not whole_unit:
+            return {"error": "The whole property is missing its required unit"}, 409
+        unit_data, unit_error = validate_unit_data(
+            whole_unit_data,
+            defaults={
+                "unit_number": "Entire property",
+                "unit_type": whole_unit.unit_type,
+                "bedrooms": whole_unit.bedrooms,
+                "bathrooms": whole_unit.bathrooms,
+                "rent_amount": whole_unit.rent_amount,
+                "floor_number": whole_unit.floor_number,
+                "layout": whole_unit.layout,
+                "size": whole_unit.size,
+                "size_unit": whole_unit.size_unit,
+                "furnished": whole_unit.furnished,
+                "description": whole_unit.description,
+            },
+            currency=cleaned.get("currency", prop.currency),
+            floors=cleaned.get("floors", prop.floors),
+            partial=True,
+        )
+        if unit_error:
+            return {"error": f"whole_unit: {unit_error}"}, 400
+    new_floors = cleaned.get("floors", prop.floors)
+    if Unit.query.filter(
+        Unit.property_id == prop.id,
+        Unit.floor_number > new_floors,
+    ).first():
+        return {
+            "error": "The number of floors cannot be lower than a unit's floor number"
+        }, 409
+
+    new_currency = cleaned.get("currency")
+    if new_currency and new_currency != prop.currency:
+        if (
+            Lease.query.join(Unit, Lease.unit_id == Unit.id)
+            .filter(Unit.property_id == prop.id)
+            .first()
+        ):
+            return {"error": "A property's currency cannot change after it has a lease"}, 409
+        for unit in Unit.query.filter_by(property_id=prop.id).all():
+            if unit.rent_amount is not None:
+                _, amount_error = parse_money(unit.rent_amount, new_currency)
+                if amount_error:
+                    return {
+                        "error": "Existing unit rents must match the new currency's decimal precision"
+                    }, 409
+
     for field, value in cleaned.items():
         setattr(prop, field, value)
+    if changing_to_whole:
+        db.session.add(Unit(property=prop, **unit_data))
+    elif whole_unit_data is not None:
+        for field, value in unit_data.items():
+            setattr(whole_unit, field, value)
 
     db.session.commit()
 
     return {
         "message": "Property updated successfully",
-        "property": prop.to_dict(),
+        "property": property_json(prop, property_occupancy([prop])[prop.id]),
     }, 200
 
 
@@ -388,6 +632,10 @@ def delete_property(property_id):
     if Unit.query.filter_by(property_id=prop.id).first():
         return {
             "error": "Delete or move this property's units before deleting the property"
+        }, 409
+    if PropertyConversation.query.filter_by(property_id=prop.id).first():
+        return {
+            "error": "This property has message history and cannot be deleted"
         }, 409
 
     db.session.delete(prop)

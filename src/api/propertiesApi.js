@@ -1,12 +1,10 @@
-import { getToken } from "./authAPI.js";
+import { authenticatedFetch } from "./authAPI.js";
 
 async function request(path, options = {}, baseUrl = "/api/properties") {
-  const token = getToken();
-  const response = await fetch(`${baseUrl}${path}`, {
+  const response = await authenticatedFetch(`${baseUrl}${path}`, {
     ...options,
     headers: {
       "Content-Type": "application/json",
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
       ...options.headers,
     },
   });
@@ -45,6 +43,10 @@ export function listProperties({
   if (city.trim()) params.set("city", city.trim());
 
   return request(`?${params.toString()}`);
+}
+
+export function getPropertiesSummary() {
+  return request("/summary");
 }
 
 export function listPublicProperties({
@@ -113,14 +115,28 @@ export async function getPublicProperty(id) {
 }
 
 export async function listPublicPropertyUnits(propertyId, { unitId } = {}) {
-  const params = new URLSearchParams();
-  if (unitId) params.set("unit_id", String(unitId));
-  const query = params.size ? `?${params.toString()}` : "";
-  return request(
-    `/${encodeURIComponent(propertyId)}/units${query}`,
+  const params = unitId
+    ? new URLSearchParams({ unit_id: String(unitId) })
+    : new URLSearchParams({ page: "1", per_page: "100" });
+  const path = `/${encodeURIComponent(propertyId)}/units`;
+  const firstPage = await request(
+    `${path}?${params.toString()}`,
     {},
     "/api/properties/public"
   );
+  if (unitId || !firstPage.pagination) return firstPage;
+
+  const units = [...firstPage.units];
+  for (let page = 2; page <= firstPage.pagination.pages; page += 1) {
+    params.set("page", String(page));
+    const result = await request(
+      `${path}?${params.toString()}`,
+      {},
+      "/api/properties/public"
+    );
+    units.push(...result.units);
+  }
+  return { ...firstPage, units };
 }
 
 export async function createProperty(values) {
