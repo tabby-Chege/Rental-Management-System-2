@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { listApplications } from "../../api/applicationsApi";
 import PaymentCheckoutForm from "../../Components/PaymentCheckoutForm";
+import ReservationCountdown from "../../Components/ReservationCountdown";
 import {
   listNotifications,
   markNotificationRead,
@@ -123,13 +124,18 @@ function TenantApplicationsPage() {
               <p>Requested move-in: {application.move_in_date}</p>
               {application.message && <p>{application.message}</p>}
               {application.payment_due_at && (
-                <p>
-                  Payment deadline:{" "}
-                  {formatPropertyDate(
-                    application.payment_due_at,
-                    application.property?.time_zone,
+                <>
+                  <p>
+                    Payment deadline:{" "}
+                    {formatPropertyDate(
+                      application.payment_due_at,
+                      application.property?.time_zone,
+                    )}
+                  </p>
+                  {["approved", "offered"].includes(application.status) && (
+                    <ReservationCountdown deadline={application.payment_due_at} />
                   )}
-                </p>
+                </>
               )}
               {["approved", "offered"].includes(application.status) && (
                 application.lease_end_date ? (

@@ -32,7 +32,6 @@ applications_bp = Blueprint(
 )
 MANAGER_ROLES = {"landlord", "admin"}
 MAX_MESSAGE_LENGTH = 5000
-MAX_EXTENSION_HOURS = 720
 
 
 def current_user():
@@ -368,7 +367,7 @@ def decide_application(application_id):
     application.status = decision
     application.decision_reason = reason or None
     if decision == "approved":
-        application.payment_due_at = reservation_deadline(property_record)
+        application.payment_due_at = reservation_deadline(utc_now())
         waitlisted = Application.query.filter(
             Application.unit_id == unit.id,
             Application.id != application.id,
@@ -399,49 +398,6 @@ def decide_application(application_id):
     if decision == "approved":
         response["tenant"] = tenant.to_dict()
     return response, 200
-
-
-@applications_bp.route("/<int:application_id>/extend-deadline", methods=["POST"])
-@jwt_required()
-def extend_reservation_deadline(application_id):
-    user = current_user()
-    if not user:
-        return {"error": "User not found"}, 404
-    if user.role not in MANAGER_ROLES:
-        return {"error": "Only landlords and admins can extend a reservation"}, 403
-
-    visible = visible_application(user, application_id)
-    if not visible:
-        return {"error": "Application not found"}, 404
-    process_reservations(unit_ids=[visible.unit_id])
-    application = visible_application(user, application_id)
-    unit = Unit.query.filter_by(id=visible.unit_id).with_for_update().first()
-    if not application or not unit:
-        return {"error": "Application not found"}, 404
-    if application.status not in {"approved", "offered"}:
-        return {"error": "Only an active reservation can be extended"}, 409
-
-    data = request.get_json(silent=True)
-    hours = data.get("additional_hours") if isinstance(data, dict) else None
-    if isinstance(hours, bool) or not isinstance(hours, int) or not 1 <= hours <= MAX_EXTENSION_HOURS:
-        return {"error": f"additional_hours must be an integer from 1 to {MAX_EXTENSION_HOURS}"}, 400
-    now = utc_now()
-    due_at = as_utc(application.payment_due_at) if application.payment_due_at else None
-    if not due_at or due_at <= now:
-        return {"error": "The reservation deadline has passed"}, 409
-    extended_due_at = due_at + timedelta(hours=hours)
-    if extended_due_at > now + timedelta(hours=MAX_EXTENSION_HOURS):
-        return {"error": "The extended deadline cannot be more than 30 days away"}, 400
-
-    application.payment_due_at = extended_due_at
-    add_reservation_notification(
-        application,
-        "deadline_extended",
-        "The landlord extended your reservation payment deadline.",
-        extended_due_at,
-    )
-    db.session.commit()
-    return {"application": application_payload(application)}, 200
 
 
 @applications_bp.route("/<int:application_id>/lease-terms", methods=["PATCH"])
@@ -489,7 +445,12 @@ def confirm_reservation_payment(application_id):
         return {"error": "Application not found"}, 404
     process_reservations(unit_ids=[visible.unit_id])
     unit = Unit.query.filter_by(id=visible.unit_id).with_for_update().first()
-    application = visible_application(user, application_id)
+    application = (
+        owned_application_query(user)
+        .filter(Application.id == application_id)
+        .with_for_update()
+        .first()
+    )
     if not application or not unit:
         return {"error": "Application not found"}, 404
 

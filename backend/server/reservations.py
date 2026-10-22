@@ -5,7 +5,8 @@ from server.extensions import db
 from server.models_application import Application, ReservationNotification
 from server.models_unit_lease import Lease, Unit
 
-REMINDER_WINDOW = timedelta(hours=24)
+RESERVATION_WINDOW = timedelta(hours=1)
+REMINDER_WINDOW = timedelta(minutes=15)
 RESERVATION_STATUSES = ("approved", "offered")
 
 
@@ -19,10 +20,8 @@ def as_utc(value):
     return value.astimezone(timezone.utc)
 
 
-def reservation_deadline(property_record, now=None):
-    return as_utc(now or utc_now()) + timedelta(
-        hours=property_record.reservation_hold_hours
-    )
+def reservation_deadline(now=None):
+    return as_utc(now or utc_now()) + RESERVATION_WINDOW
 
 
 def _event_key(application, notification_type, event_time):
@@ -135,7 +134,7 @@ def _expire_reservations(now, unit_ids=None, user_id=None):
             continue
 
         next_application.status = "offered"
-        next_application.payment_due_at = reservation_deadline(unit.property, now)
+        next_application.payment_due_at = reservation_deadline(now)
         add_reservation_notification(
             next_application,
             "waitlist_offer",
@@ -159,7 +158,7 @@ def _create_deadline_reminders(now, unit_ids=None, user_id=None):
         notification = add_reservation_notification(
             application,
             "reservation_reminder",
-            "Payment for your reservation is due within 24 hours.",
+            "Payment for your reservation is due within 15 minutes.",
             application.payment_due_at,
         )
         if notification.id is None:

@@ -32,7 +32,6 @@ const EMPTY_FORM = {
   rental_type: "multi_unit",
   subtype: "apartment_block",
   floors: "1",
-  reservation_hold_hours: "48",
   description: "",
 };
 const EMPTY_UNIT_FORM = {
@@ -67,7 +66,6 @@ function toFormValues(property) {
     rental_type: property.rental_type || "multi_unit",
     subtype: property.subtype || "apartment_block",
     floors: String(property.floors || 1),
-    reservation_hold_hours: String(property.reservation_hold_hours || 48),
     description: property.description || "",
   };
 }
@@ -78,7 +76,6 @@ function propertyPayload(form) {
     ...values,
     country: form.country === "OTHER" ? other_country_code.trim().toUpperCase() : form.country,
     floors: Number(form.floors),
-    reservation_hold_hours: Number(form.reservation_hold_hours),
   };
 }
 
@@ -518,21 +515,6 @@ async function handleEdit(property) {
             </label>
           )}
         </div>
-
-        <label>
-          Reservation payment hold (hours) *
-          <input
-            type="number"
-            name="reservation_hold_hours"
-            value={form.reservation_hold_hours}
-            onChange={handleChange}
-            min="1"
-            max="720"
-            step="1"
-            required
-          />
-          <small>Default: 48 hours. This can be changed for each property.</small>
-        </label>
 
         <label>
           Name *

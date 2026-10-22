@@ -1,5 +1,5 @@
 from types import SimpleNamespace
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 
 from server.extensions import db
@@ -203,6 +203,127 @@ def test_bank_transfer_confirms_reserved_application_once(client, world):
         assert Payment.query.filter_by(
             provider="bank_transfer", provider_reference="BANK-TRANSFER-001"
         ).count() == 1
+
+
+def test_payment_after_reservation_expiry_is_refunded_and_promotes_waitlist(
+    client, world, monkeypatch
+):
+    unit_id = create_unit(client, world["landlord"])
+    first = apply(client, world["tenant"], unit_id).get_json()["application"]
+    second = apply(client, world["tenant2"], unit_id).get_json()["application"]
+    approval = client.patch(
+        f"/api/applications/{first['id']}",
+        headers=world["landlord"],
+        json={"status": "approved", "reason": "The application is complete."},
+    )
+    assert approval.status_code == 200
+    lease_end_date = (
+        date.fromisoformat(first["move_in_date"]) + timedelta(days=365)
+    ).isoformat()
+    assert client.patch(
+        f"/api/applications/{first['id']}/lease-terms",
+        headers=world["landlord"],
+        json={"lease_end_date": lease_end_date},
+    ).status_code == 200
+
+    enable_stripe(client)
+    monkeypatch.setattr(
+        PROVIDERS["stripe"],
+        "create_checkout",
+        lambda attempt: {
+            "provider_reference": "cs_test_expired_reservation",
+            "checkout_url": "https://checkout.stripe.test/expired",
+            "provider_data": {},
+        },
+    )
+    monkeypatch.setattr(
+        PROVIDERS["stripe"],
+        "verify",
+        lambda attempt, webhook=None: {
+            "status": "completed",
+            "provider_reference": "cs_test_expired_reservation",
+            "amount": Decimal("1200"),
+            "currency": "KES",
+        },
+    )
+    checkout = client.post(
+        "/api/payments/checkout",
+        headers={**world["tenant"], "Idempotency-Key": "expired-reservation-001"},
+        json={
+            "application_id": first["id"],
+            "amount": 1200,
+            "payment_type": "reservation",
+            "provider": "stripe",
+        },
+    )
+    assert checkout.status_code == 201
+    attempt_id = checkout.get_json()["attempt"]["id"]
+
+    fixed_now = datetime.now(timezone.utc) + timedelta(seconds=10)
+    with client.application.app_context():
+        application = db.session.get(Application, first["id"])
+        application.payment_due_at = fixed_now - timedelta(seconds=1)
+        db.session.commit()
+    monkeypatch.setattr("server.reservations.utc_now", lambda: fixed_now)
+
+    checked = client.get(
+        f"/api/payments/attempts/{attempt_id}",
+        headers=world["tenant"],
+    )
+    assert checked.status_code == 200
+    assert checked.get_json()["attempt"]["status"] == "refund_required"
+    with client.application.app_context():
+        expired = db.session.get(Application, first["id"])
+        promoted = db.session.get(Application, second["id"])
+        assert expired.status == "expired"
+        assert expired.lease_id is None
+        assert promoted.status == "offered"
+        assert promoted.payment_due_at.replace(tzinfo=timezone.utc) == (
+            fixed_now + timedelta(hours=1)
+        )
+        assert Lease.query.filter_by(unit_id=unit_id).count() == 0
+        assert Payment.query.filter_by(payment_type="reservation").count() == 0
+
+
+def test_concurrent_reservation_payment_attempts_cannot_create_two_leases(
+    client, world
+):
+    application = create_reservation(client, world)
+    checkout_attempts = []
+    for key in ("duplicate-reservation-001", "duplicate-reservation-002"):
+        checkout = client.post(
+            "/api/payments/checkout",
+            headers={**world["tenant"], "Idempotency-Key": key},
+            json={
+                "application_id": application["id"],
+                "amount": 1200,
+                "payment_type": "reservation",
+                "provider": "bank_transfer",
+            },
+        )
+        assert checkout.status_code == 201
+        checkout_attempts.append(checkout.get_json()["attempt"]["id"])
+
+    first = client.post(
+        f"/api/payments/attempts/{checkout_attempts[0]}/confirm",
+        headers=world["landlord"],
+        json={"provider_reference": "BANK-TRANSFER-CONCURRENT-001"},
+    )
+    second = client.post(
+        f"/api/payments/attempts/{checkout_attempts[1]}/confirm",
+        headers=world["landlord"],
+        json={"provider_reference": "BANK-TRANSFER-CONCURRENT-002"},
+    )
+
+    assert first.status_code == 200
+    assert first.get_json()["attempt"]["status"] == "completed"
+    assert second.status_code == 200
+    assert second.get_json()["attempt"]["status"] == "refund_required"
+    with client.application.app_context():
+        current = db.session.get(Application, application["id"])
+        assert current.status == "paid"
+        assert Lease.query.filter_by(unit_id=current.unit_id).count() == 1
+        assert Payment.query.filter_by(payment_type="reservation").count() == 1
 
 
 def test_provider_webhook_is_verified_and_idempotent(client, world, monkeypatch):
@@ -469,4 +590,3 @@ def test_mpesa_receipt_and_provider_metadata_are_persisted(client, world):
         assert attempt.provider_data["receipt_number"] == "TESTRECEIPT99"
         assert attempt.provider_data["transaction_date"] == "20261021150000"
         assert attempt.provider_data["phone_number"] == "254712345678"
-

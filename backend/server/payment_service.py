@@ -431,6 +431,14 @@ def _create_payment_for_attempt(attempt, lease, provider_result):
 
 
 def finalize_payment_attempt(attempt, provider_result):
+    attempt = (
+        PaymentAttempt.query.filter_by(id=attempt.id)
+        .with_for_update()
+        .populate_existing()
+        .first()
+    )
+    if not attempt:
+        raise ValueError("Payment attempt no longer exists")
     if attempt.status == "completed":
         return attempt
     if attempt.status != "pending":
@@ -468,8 +476,23 @@ def finalize_payment_attempt(attempt, provider_result):
             .with_for_update()
             .first()
         )
-        if application and application.status in {"paid", "leased"} and application.lease_id:
-            lease = db.session.get(Lease, application.lease_id)
+        if application and application.status in {"paid", "leased"}:
+            attempt.provider_reference = attempt.provider_reference or reference
+            attempt.status = "refund_required"
+            attempt.updated_at = utc_now()
+            attempt.completed_at = attempt.updated_at
+            customer = db.session.get(User, attempt.user_id)
+            queue_email(
+                f"payment-attempt:{attempt.id}:already-paid",
+                customer.email if customer else attempt.customer_email,
+                "Duplicate reservation payment requires a refund",
+                (
+                    f"Provider {attempt.provider} confirmed {attempt.currency} "
+                    f"{attempt.amount}, but this reservation has already been paid. "
+                    "Contact the property manager to arrange a refund."
+                ),
+            )
+            return attempt
         elif (
             not application
             or application.status not in {"approved", "offered"}

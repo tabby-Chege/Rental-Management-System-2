@@ -1,5 +1,8 @@
 from datetime import date, datetime, timedelta, timezone
 
+import pytest
+from sqlalchemy.exc import IntegrityError
+
 from server.extensions import db
 from server.models_application import Application
 from server.models_tenant import Tenant
@@ -12,7 +15,6 @@ def create_unit(
     headers,
     name="Application property",
     rent_amount=1200,
-    reservation_hold_hours=48,
 ):
     property_response = client.post(
         "/api/properties",
@@ -22,7 +24,6 @@ def create_unit(
             "address": "1 Main Street",
             "city": "Nairobi",
             "state": "Nairobi",
-            "reservation_hold_hours": reservation_hold_hours,
         },
     )
     assert property_response.status_code == 201
@@ -215,7 +216,6 @@ def test_payment_confirmation_creates_the_lease_after_reservation(client, world)
     assert confirmation_payload["lease"]["unit_id"] == unit_id
     assert confirmation_payload["payment"]["status"] == "Completed"
     assert confirmation_payload["application"]["status"] == "paid"
-
     repeated_confirmation = client.post(
         f"/api/applications/{application['id']}/confirm-payment",
         headers=world["landlord"],
@@ -226,6 +226,53 @@ def test_payment_confirmation_creates_the_lease_after_reservation(client, world)
         repeated_confirmation.get_json()["lease"]["id"]
         == confirmation_payload["lease"]["id"]
     )
+
+
+def test_approval_reservation_deadline_is_exactly_one_hour(client, world, monkeypatch):
+    fixed_now = datetime(2026, 10, 21, 12, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr("server.routes.applications.utc_now", lambda: fixed_now)
+    unit_id = create_unit(client, world["landlord"])
+    application = apply(client, world["tenant"], unit_id).get_json()["application"]
+
+    approval = client.patch(
+        f"/api/applications/{application['id']}",
+        headers=world["landlord"],
+        json={"status": "approved", "reason": "The application is complete."},
+    )
+
+    assert approval.status_code == 200
+    assert datetime.fromisoformat(
+        approval.get_json()["application"]["payment_due_at"]
+    ) == fixed_now + timedelta(hours=1)
+
+
+def test_database_rejects_simultaneous_active_reservations_for_one_unit(
+    client, world
+):
+    unit_id = create_unit(client, world["landlord"])
+    first = Application(
+        unit_id=unit_id,
+        applicant_user_id=world["ids"]["tenant_user"],
+        move_in_date=date.today() + timedelta(days=30),
+        profile_snapshot={},
+        status="pending",
+    )
+    second = Application(
+        unit_id=unit_id,
+        applicant_user_id=world["ids"]["tenant_user2"],
+        move_in_date=date.today() + timedelta(days=30),
+        profile_snapshot={},
+        status="pending",
+    )
+    db.session.add_all([first, second])
+    db.session.flush()
+
+    first.status = "approved"
+    db.session.flush()
+    second.status = "offered"
+    with pytest.raises(IntegrityError):
+        db.session.flush()
+    db.session.rollback()
 
 
 def test_tenant_cannot_decide_application_and_decline_does_not_create_tenant(
@@ -258,8 +305,10 @@ def test_tenant_cannot_decide_application_and_decline_does_not_create_tenant(
     assert client.get("/api/tenants/me", headers=world["tenant"]).status_code == 404
 
 
-def test_waitlist_offer_deadline_notifications_and_expiry(client, world):
-    unit_id = create_unit(client, world["landlord"], reservation_hold_hours=72)
+def test_waitlist_offer_deadline_notifications_and_expiry(
+    client, world, monkeypatch
+):
+    unit_id = create_unit(client, world["landlord"])
     first = apply(client, world["tenant"], unit_id).get_json()["application"]
     second = apply(client, world["tenant2"], unit_id).get_json()["application"]
     assert second["status"] == "pending"
@@ -270,16 +319,17 @@ def test_waitlist_offer_deadline_notifications_and_expiry(client, world):
         json={"status": "approved", "reason": "The application is complete."},
     )
     assert approval.status_code == 200
-    assert approval.get_json()["application"]["property"]["reservation_hold_hours"] == 72
 
     queued = client.get("/api/applications", headers=world["tenant2"]).get_json()[
         "applications"
     ][0]
     assert queued["status"] == "waitlisted"
 
+    fixed_now = datetime.now(timezone.utc) + timedelta(seconds=10)
+    monkeypatch.setattr("server.reservations.utc_now", lambda: fixed_now)
     with client.application.app_context():
         application = db.session.get(Application, first["id"])
-        application.payment_due_at = datetime.now(timezone.utc) - timedelta(minutes=1)
+        application.payment_due_at = fixed_now - timedelta(minutes=1)
         db.session.commit()
 
     reserved_units = client.get(
@@ -291,11 +341,13 @@ def test_waitlist_offer_deadline_notifications_and_expiry(client, world):
         "applications"
     ][0]
     assert offered["status"] == "offered"
-    assert offered["payment_due_at"]
+    assert datetime.fromisoformat(offered["payment_due_at"]) == (
+        fixed_now + timedelta(hours=1)
+    )
 
     with client.application.app_context():
         application = db.session.get(Application, second["id"])
-        application.payment_due_at = datetime.now(timezone.utc) + timedelta(hours=12)
+        application.payment_due_at = fixed_now + timedelta(minutes=10)
         db.session.commit()
 
     notifications = client.get(
@@ -325,7 +377,7 @@ def test_waitlist_offer_deadline_notifications_and_expiry(client, world):
     assert late_payment.status_code == 409
 
 
-def test_landlord_can_extend_an_active_reservation_deadline(client, world):
+def test_reservation_deadline_cannot_be_extended(client, world):
     unit_id = create_unit(client, world["landlord"])
     application = apply(client, world["tenant"], unit_id).get_json()["application"]
     approval = client.patch(
@@ -333,20 +385,12 @@ def test_landlord_can_extend_an_active_reservation_deadline(client, world):
         headers=world["landlord"],
         json={"status": "approved", "reason": "The application is complete."},
     )
-    original_due = datetime.fromisoformat(
-        approval.get_json()["application"]["payment_due_at"]
-    )
-
-    extended = client.post(
+    rejected = client.post(
         f"/api/applications/{application['id']}/extend-deadline",
         headers=world["landlord"],
         json={"additional_hours": 24},
     )
-    assert extended.status_code == 200
-    new_due = datetime.fromisoformat(
-        extended.get_json()["application"]["payment_due_at"]
-    )
-    assert new_due - original_due == timedelta(hours=24)
+    assert rejected.status_code == 404
 
 
 def test_reservation_actions_are_restricted_to_the_property_owner(client, world):
@@ -363,7 +407,7 @@ def test_reservation_actions_are_restricted_to_the_property_owner(client, world)
         f"/api/applications/{application['id']}/extend-deadline",
         headers=world["tenant"],
         json={"additional_hours": 24},
-    ).status_code == 403
+    ).status_code == 404
     assert client.post(
         f"/api/applications/{application['id']}/confirm-payment",
         headers=world["tenant"],

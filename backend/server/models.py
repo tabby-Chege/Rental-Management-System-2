@@ -144,6 +144,7 @@ class Property(db.Model):
     rental_type = db.Column(db.String(20), nullable=False, default="multi_unit")
     subtype = db.Column(db.String(30), nullable=False, default="apartment_block")
     floors = db.Column(db.Integer, nullable=False, default=1)
+    # Retained for existing databases; the reservation service uses a fixed window.
     reservation_hold_hours = db.Column(
         db.Integer, nullable=False, default=48, server_default="48"
     )
@@ -175,7 +176,6 @@ class Property(db.Model):
             "rental_type": self.rental_type,
             "subtype": self.subtype,
             "floors": self.floors,
-            "reservation_hold_hours": self.reservation_hold_hours,
             "photos": [
                 photo.to_dict()
                 for photo in sorted(self.photos, key=lambda item: (not item.is_cover, item.id))

@@ -86,6 +86,32 @@ def test_property_crud_and_owner_enforcement(client, world):
     assert client.get(prop_url, headers=world["landlord"]).status_code == 404
 
 
+def test_reservation_hold_cannot_be_configured_on_properties(client, world):
+    response = client.post(
+        "/api/properties",
+        headers=world["landlord"],
+        json={
+            "name": "Fixed deadline property",
+            "address": "1 Main Street",
+            "city": "Nairobi",
+            "reservation_hold_hours": 48,
+        },
+    )
+    assert response.status_code == 400
+    assert "fixed one-hour" in response.get_json()["error"]
+
+    created = create_property(client, world["landlord"], "Fixed deadline property")
+    assert created.status_code == 201
+    property_data = created.get_json()["property"]
+    assert "reservation_hold_hours" not in property_data
+    update = client.put(
+        f"/api/properties/{property_data['id']}",
+        headers=world["landlord"],
+        json={"reservation_hold_hours": 2},
+    )
+    assert update.status_code == 400
+
+
 def test_property_pagination_and_search_are_user_scoped(client, world):
     for name in ("Oak Home", "Pine Home", "Lake Home"):
         assert create_property(client, world["landlord"], name).status_code == 201

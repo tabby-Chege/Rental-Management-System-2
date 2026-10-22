@@ -24,7 +24,7 @@ properties_bp = Blueprint("properties", __name__, url_prefix="/api/properties")
 REQUIRED_FIELDS = ["name", "address_line", "city"]
 OPTIONAL_FIELDS = [
     "country", "region", "postal_code", "time_zone", "currency",
-    "rental_type", "subtype", "floors", "reservation_hold_hours", "description",
+    "rental_type", "subtype", "floors", "description",
 ]
 LEGACY_FIELDS = {
     "address": "address_line",
@@ -92,6 +92,8 @@ def clean_payload(data, require_all):
     client can never set owner_id, id or created_at.
     """
     data = dict(data)
+    if "reservation_hold_hours" in data:
+        return None, "Reservation payments have a fixed one-hour deadline"
     legacy_address_payload = "address" in data
     for legacy_name, current_name in LEGACY_FIELDS.items():
         if legacy_name in data:
@@ -107,7 +109,7 @@ def clean_payload(data, require_all):
 
         value = data[field]
 
-        if field in {"floors", "reservation_hold_hours"}:
+        if field == "floors":
             if isinstance(value, bool) or not isinstance(value, int):
                 return None, f"{field} must be a whole number"
         else:
@@ -123,7 +125,7 @@ def clean_payload(data, require_all):
 
         cleaned[field] = (
             value
-            if field in {"floors", "reservation_hold_hours"}
+            if field == "floors"
             else (value or None)
         )
 
@@ -160,16 +162,10 @@ def clean_payload(data, require_all):
         value = cleaned["floors"]
         if isinstance(value, bool) or not isinstance(value, int) or value < 1:
             return None, "floors must be a whole number of at least 1"
-    if "reservation_hold_hours" in cleaned:
-        value = cleaned["reservation_hold_hours"]
-        if not 1 <= value <= 720:
-            return None, "reservation_hold_hours must be between 1 and 720"
-
     if require_all:
         cleaned.setdefault("rental_type", "multi_unit")
         cleaned.setdefault("subtype", "apartment_block")
         cleaned.setdefault("floors", 1)
-        cleaned.setdefault("reservation_hold_hours", 48)
 
     if require_all:
         missing = [f for f in REQUIRED_FIELDS if f not in cleaned]

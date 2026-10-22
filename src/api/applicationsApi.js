@@ -23,16 +23,6 @@ export function decideApplication(id, status, reason) {
   });
 }
 
-export function extendReservationDeadline(id, additionalHours = 24) {
-  return request(
-    `/api/applications/${encodeURIComponent(id)}/extend-deadline`,
-    {
-      method: "POST",
-      body: JSON.stringify({ additional_hours: additionalHours }),
-    },
-  ).then((data) => data.application);
-}
-
 export function setApplicationLeaseTerms(id, leaseEndDate) {
   return request(
     `/api/applications/${encodeURIComponent(id)}/lease-terms`,

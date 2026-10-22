@@ -128,6 +128,15 @@ def _resolve_checkout_target(user, data):
     return None, lease, unit, None
 
 
+def _expire_attempt_reservation(attempt):
+    if attempt.application_id is None:
+        return
+    application = db.session.get(Application, attempt.application_id)
+    if application:
+        process_reservations(unit_ids=[application.unit_id])
+        db.session.refresh(attempt)
+
+
 @payment_gateway_bp.route("/checkout", methods=["POST"])
 @jwt_required()
 def create_checkout():
@@ -289,6 +298,7 @@ def get_payment_attempt(attempt_id):
     attempt = db.session.get(PaymentAttempt, attempt_id)
     if not attempt or not _attempt_visible_to(user, attempt):
         return {"error": "Payment attempt not found"}, 404
+    _expire_attempt_reservation(attempt)
     if attempt.status == "pending" and attempt.provider != "bank_transfer":
         try:
             process_payment_attempt(attempt, PROVIDERS[attempt.provider])
@@ -367,6 +377,7 @@ def confirm_bank_transfer(attempt_id):
         or attempt.provider != "bank_transfer"
     ):
         return {"error": "Bank transfer attempt not found"}, 404
+    _expire_attempt_reservation(attempt)
     if attempt.status == "completed":
         return {"attempt": attempt.to_dict()}, 200
     if attempt.status != "pending":
@@ -417,6 +428,7 @@ def _process_provider_webhook(provider_name, payload):
     ).first()
     if not attempt:
         return {"error": "Payment attempt not found"}, 404
+    _expire_attempt_reservation(attempt)
     if attempt.status == "completed":
         return {"received": True, "status": "completed"}, 200
     try:

@@ -58,6 +58,13 @@ class Application(db.Model):
     )
 
     def to_dict(self):
+        payment_due_at = self.payment_due_at
+        if payment_due_at:
+            payment_due_at = (
+                payment_due_at.replace(tzinfo=timezone.utc)
+                if payment_due_at.tzinfo is None
+                else payment_due_at.astimezone(timezone.utc)
+            )
         return {
             "id": self.id,
             "unit_id": self.unit_id,
@@ -70,7 +77,7 @@ class Application(db.Model):
                 self.lease_end_date.isoformat() if self.lease_end_date else None
             ),
             "payment_due_at": (
-                self.payment_due_at.isoformat() if self.payment_due_at else None
+                payment_due_at.isoformat() if payment_due_at else None
             ),
             "decision_reason": self.decision_reason,
             "status": self.status,

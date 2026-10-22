@@ -2,11 +2,11 @@ import { useEffect, useState } from "react";
 import {
   confirmReservationPayment,
   decideApplication,
-  extendReservationDeadline,
   listApplications,
   setApplicationLeaseTerms,
 } from "../../api/applicationsApi";
 import { downloadTenantDocument } from "../../api/tenantProfilesApi";
+import ReservationCountdown from "../../Components/ReservationCountdown";
 import { currencyPrecision } from "../../utils/money";
 import "../manage.css";
 
@@ -137,18 +137,24 @@ function ManageApplicationsPage() {
 
   useEffect(() => {
     let ignore = false;
-    listApplications()
-      .then((items) => {
-        if (!ignore) setApplications(items);
-      })
-      .catch((requestError) => {
+    async function load(initial = false) {
+      try {
+        const items = await listApplications();
+        if (!ignore) {
+          setApplications(items);
+          setError("");
+        }
+      } catch (requestError) {
         if (!ignore) setError(requestError.message);
-      })
-      .finally(() => {
-        if (!ignore) setLoading(false);
-      });
+      } finally {
+        if (initial && !ignore) setLoading(false);
+      }
+    }
+    load(true);
+    const interval = window.setInterval(() => load(), 15000);
     return () => {
       ignore = true;
+      window.clearInterval(interval);
     };
   }, []);
 
@@ -164,19 +170,6 @@ function ManageApplicationsPage() {
       setApplications(await listApplications());
       setDecision(null);
       setDecisionReason("");
-    } catch (requestError) {
-      setError(requestError.message);
-    } finally {
-      setSavingId(null);
-    }
-  }
-
-  async function extendDeadline(application) {
-    setError("");
-    setSavingId(application.id);
-    try {
-      await extendReservationDeadline(application.id, 24);
-      setApplications(await listApplications());
     } catch (requestError) {
       setError(requestError.message);
     } finally {
@@ -276,13 +269,16 @@ function ManageApplicationsPage() {
               {application.message && <p>{application.message}</p>}
               {application.decision_reason && <p>Decision reason: {application.decision_reason}</p>}
               {application.payment_due_at && (
-                <p>
-                  Payment deadline:{" "}
-                  {formatPropertyDate(
-                    application.payment_due_at,
-                    application.property?.time_zone,
-                  )}
-                </p>
+                <>
+                  <p>
+                    Payment deadline:{" "}
+                    {formatPropertyDate(
+                      application.payment_due_at,
+                      application.property?.time_zone,
+                    )}
+                  </p>
+                  <ReservationCountdown deadline={application.payment_due_at} />
+                </>
               )}
             </div>
             <div>
@@ -353,14 +349,6 @@ function ManageApplicationsPage() {
                     isSaving={savingId === application.id}
                     onSave={saveLeaseTerms}
                   />
-                  <button
-                    className="manage-button is-secondary"
-                    type="button"
-                    disabled={savingId === application.id}
-                    onClick={() => extendDeadline(application)}
-                  >
-                    Extend by 24 hours
-                  </button>
                   <ReservationPaymentForm
                     key={application.id}
                     application={application}
