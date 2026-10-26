@@ -5,8 +5,10 @@ import json
 import re
 import secrets
 from datetime import datetime, timedelta, timezone
+from urllib.parse import urlencode
 
-from flask import Blueprint, current_app, request
+from cryptography.fernet import Fernet
+from flask import Blueprint, current_app, jsonify, request
 from flask_jwt_extended import (
     create_access_token,
     create_refresh_token,
@@ -14,11 +16,11 @@ from flask_jwt_extended import (
     get_jwt,
     jwt_required,
 )
-from cryptography.fernet import Fernet
 from google.auth.exceptions import GoogleAuthError
 from google.auth.transport.requests import Request as GoogleRequest
 from google.oauth2 import id_token
 import pyotp
+import requests
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 from sqlalchemy import select
 from webauthn import (
@@ -41,6 +43,7 @@ from server.decorators import role_required
 from server.extensions import db
 from server.models import RevokedToken, User
 from server.models_auth_factors import (
+    AuthFactorChallenge,
     AuthOtpChallenge,
     AuthPasskeyChallenge,
     PasskeyCredential,
@@ -55,7 +58,7 @@ PASSWORD_MIN_LENGTH = 10
 PASSWORD_MAX_BYTES = 72
 LOGIN_ERROR = "Invalid email or password"
 FACTOR_CHALLENGE_MAX_AGE_SECONDS = 600
-OTP_CHALLENGE_MAX_AGE_SECONDS = 600
+OTP_CHALLENGE_MAX_AGE_SECONDS = 300
 OTP_MAX_ATTEMPTS = 5
 OTP_RESEND_SECONDS = 30
 OTP_MAX_PER_HOUR = 5
@@ -69,7 +72,25 @@ def factor_serializer():
 
 
 def create_factor_challenge(user, purpose):
-    return factor_serializer().dumps({"user_id": user.id, "purpose": purpose})
+    token = factor_serializer().dumps(
+        {
+            "user_id": user.id,
+            "purpose": purpose,
+            "nonce": secrets.token_urlsafe(32),
+        }
+    )
+    now = datetime.now(timezone.utc)
+    db.session.add(
+        AuthFactorChallenge(
+            challenge_hash=challenge_digest(token),
+            user_id=user.id,
+            purpose=purpose,
+            expires_at=now + timedelta(seconds=FACTOR_CHALLENGE_MAX_AGE_SECONDS),
+            created_at=now,
+        )
+    )
+    db.session.commit()
+    return token
 
 
 def read_factor_challenge(token, purpose):
@@ -83,6 +104,17 @@ def read_factor_challenge(token, purpose):
     except (BadSignature, SignatureExpired):
         return None
     if not isinstance(payload, dict) or payload.get("purpose") != purpose:
+        return None
+    challenge = AuthFactorChallenge.query.filter_by(
+        challenge_hash=challenge_digest(token),
+        user_id=payload.get("user_id"),
+        purpose=purpose,
+    ).first()
+    if (
+        not challenge
+        or challenge.consumed_at is not None
+        or as_utc(challenge.expires_at) <= datetime.now(timezone.utc)
+    ):
         return None
     return db.session.get(User, payload.get("user_id"))
 
@@ -111,7 +143,17 @@ def decrypt_totp_secret(encrypted_secret):
     return totp_cipher().decrypt(encrypted_secret.encode("ascii")).decode("utf-8")
 
 
+def lock_auth_user(user):
+    return db.session.execute(
+        select(User)
+        .where(User.id == user.id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    ).scalar_one()
+
+
 def authenticate_with_totp(user, code):
+    user = lock_auth_user(user)
     if (
         not isinstance(code, str)
         or len(code.strip()) != 6
@@ -153,16 +195,26 @@ def authentication_response(user, mfa_verified=False):
 
 
 def factor_required_response(user):
-    if user.totp_enabled:
+    methods = available_factor_methods(user)
+    if methods:
         return {
             "mfa_required": True,
             "challenge_token": create_factor_challenge(user, "verify"),
-            "methods": available_factor_methods(user),
+            "methods": methods,
+            "totp_setup_available": not user.totp_enabled,
         }
     return {
         "mfa_setup_required": True,
         "challenge_token": create_factor_challenge(user, "setup"),
     }
+
+
+def email_delivery_configured():
+    return bool(
+        current_app.config.get("SMTP_HOST")
+        and current_app.config.get("SMTP_FROM_ADDRESS")
+        and not current_app.config.get("MAIL_SUPPRESS_SEND")
+    )
 
 
 def available_factor_methods(user):
@@ -171,11 +223,11 @@ def available_factor_methods(user):
         methods.append({"id": "totp", "label": "Authenticator app"})
     if (
         user.email
-        and current_app.config.get("SMTP_HOST")
-        and current_app.config.get("SMTP_FROM_ADDRESS")
-        and not current_app.config.get("MAIL_SUPPRESS_SEND")
+        and email_delivery_configured()
+        and (user.email_verified_at is not None or not user.totp_enabled)
     ):
-        methods.append({"id": "email", "label": f"Email ({mask_email(user.email)})"})
+        label = "Email" if user.email_verified_at else "Verify email"
+        methods.append({"id": "email", "label": f"{label} ({mask_email(user.email)})"})
     if sms_delivery_configured() and user.mfa_phone_verified and user.mfa_phone:
         methods.append({"id": "sms", "label": f"Text message ({mask_phone(user.mfa_phone)})"})
     if PasskeyCredential.query.filter_by(user_id=user.id).count():
@@ -217,7 +269,7 @@ def code_digest(user_id, method, code):
 
 def get_login_factor_user(data):
     user = read_factor_challenge(data.get("challenge_token"), "verify")
-    if not user or not user.totp_enabled or not user.totp_secret:
+    if not user:
         return None
     now = datetime.now(timezone.utc)
     if user.locked_until and as_utc(user.locked_until) > now:
@@ -226,6 +278,9 @@ def get_login_factor_user(data):
 
 
 def prune_expired_auth_challenges(now):
+    AuthFactorChallenge.query.filter(
+        AuthFactorChallenge.expires_at <= now - timedelta(days=1)
+    ).delete(synchronize_session=False)
     AuthOtpChallenge.query.filter(
         AuthOtpChallenge.expires_at <= now - timedelta(hours=1)
     ).delete(synchronize_session=False)
@@ -236,6 +291,7 @@ def prune_expired_auth_challenges(now):
 
 def create_or_replace_otp(user, method, digest, target=None):
     now = datetime.now(timezone.utc)
+    lock_auth_user(user)
     prune_expired_auth_challenges(now)
     recent = AuthOtpChallenge.query.filter(
         AuthOtpChallenge.user_id == user.id,
@@ -293,7 +349,7 @@ def issue_otp(user, method, token_digest, target=None):
             f"mfa-code:{user.id}:{token_digest}:{challenge.created_at.isoformat()}",
             user.email,
             "Your Property Finder sign-in code",
-            f"Your verification code is {code}. It expires in 10 minutes. "
+            f"Your verification code is {code}. It expires in 5 minutes. "
             "If you did not request it, you can ignore this email.",
             encrypt_body=True,
         )
@@ -355,7 +411,22 @@ def consume_otp(user, method, token_digest, code):
     return True
 
 
-def complete_factor_login(user):
+def complete_factor_login(user, challenge_token):
+    now = datetime.now(timezone.utc)
+    challenge = db.session.execute(
+        select(AuthFactorChallenge)
+        .where(
+            AuthFactorChallenge.challenge_hash == challenge_digest(challenge_token),
+            AuthFactorChallenge.user_id == user.id,
+            AuthFactorChallenge.consumed_at.is_(None),
+            AuthFactorChallenge.expires_at > now,
+        )
+        .with_for_update()
+    ).scalar_one_or_none()
+    if not challenge:
+        db.session.rollback()
+        return {"error": "The authentication session is invalid or expired"}, 401
+    challenge.consumed_at = now
     user.failed_login_attempts = 0
     user.login_attempt_window_started_at = None
     user.locked_until = None
@@ -424,6 +495,7 @@ def as_utc(value):
 
 
 def record_failed_login(user, now):
+    user = lock_auth_user(user)
     lock_until = user.locked_until
     if lock_until and as_utc(lock_until) > now:
         return
@@ -566,6 +638,8 @@ def two_factor_setup():
     if not isinstance(data, dict):
         return {"error": "Request body must be valid JSON"}, 400
     user = read_factor_challenge(data.get("challenge_token"), "setup")
+    if not user:
+        user = read_factor_challenge(data.get("challenge_token"), "verify")
     if not user or user.totp_enabled:
         return {"error": "The authenticator setup session is invalid or expired"}, 401
 
@@ -593,6 +667,8 @@ def two_factor_confirm():
     if not isinstance(data, dict):
         return {"error": "Request body must be valid JSON"}, 400
     user = read_factor_challenge(data.get("challenge_token"), "setup")
+    if not user:
+        user = read_factor_challenge(data.get("challenge_token"), "verify")
     if not user or user.totp_enabled or not user.totp_pending_secret:
         return {"error": "The authenticator setup session is invalid or expired"}, 401
 
@@ -607,11 +683,7 @@ def two_factor_confirm():
 
     user.totp_enabled = True
     user.totp_pending_secret = None
-    user.failed_login_attempts = 0
-    user.login_attempt_window_started_at = None
-    user.locked_until = None
-    db.session.commit()
-    return authentication_response(user, mfa_verified=True), 200
+    return complete_factor_login(user, data["challenge_token"])
 
 
 @auth_bp.route("/two-factor/verify", methods=["POST"])
@@ -630,11 +702,7 @@ def two_factor_verify():
         record_failed_login(user, now)
         return {"error": "The authenticator code is invalid"}, 401
 
-    user.failed_login_attempts = 0
-    user.login_attempt_window_started_at = None
-    user.locked_until = None
-    db.session.commit()
-    return authentication_response(user, mfa_verified=True), 200
+    return complete_factor_login(user, data["challenge_token"])
 
 
 @auth_bp.route("/two-factor/code/send", methods=["POST"])
@@ -649,12 +717,10 @@ def send_factor_code():
     if method == "sms" and not (user.mfa_phone_verified and user.mfa_phone):
         return {"error": "A verified phone number is not configured"}, 400
     if method == "email":
-        if not (
-            current_app.config.get("SMTP_HOST")
-            and current_app.config.get("SMTP_FROM_ADDRESS")
-            and not current_app.config.get("MAIL_SUPPRESS_SEND")
-        ):
+        if not email_delivery_configured():
             return {"error": "Email verification is not configured on this server"}, 503
+        if user.totp_enabled and not user.email_verified_at:
+            return {"error": "A verified email address is required"}, 400
         target = user.email
     else:
         if not sms_delivery_configured():
@@ -666,7 +732,11 @@ def send_factor_code():
     if error:
         return {"error": error}, 429 if error.startswith(("Too many", "Please wait")) else 503
     delivery = "queued for delivery" if method == "email" else "sent"
-    return {"message": f"A verification code was {delivery} by {method}."}, 200
+    return {
+        "message": f"A verification code was {delivery} by {method}.",
+        "expires_in_seconds": OTP_CHALLENGE_MAX_AGE_SECONDS,
+        "resend_after_seconds": OTP_RESEND_SECONDS,
+    }, 200
 
 
 @auth_bp.route("/two-factor/code/verify", methods=["POST"])
@@ -680,11 +750,15 @@ def verify_factor_code():
         return {"error": "The authentication session or method is invalid"}, 401
     if method == "sms" and not (user.mfa_phone_verified and user.mfa_phone):
         return {"error": "A verified phone number is not configured"}, 400
+    if method == "email" and user.totp_enabled and not user.email_verified_at:
+        return {"error": "A verified email address is required"}, 400
     token_digest = challenge_digest(data["challenge_token"])
     if not consume_otp(user, method, token_digest, data.get("code")):
         record_failed_login(user, datetime.now(timezone.utc))
         return {"error": "The verification code is invalid or expired"}, 401
-    return complete_factor_login(user)
+    if method == "email" and not user.email_verified_at:
+        user.email_verified_at = datetime.now(timezone.utc)
+    return complete_factor_login(user, data["challenge_token"])
 
 
 @auth_bp.route("/recovery-codes/verify", methods=["POST"])
@@ -712,7 +786,7 @@ def verify_recovery_code():
         record_failed_login(user, datetime.now(timezone.utc))
         return {"error": "The recovery code is invalid or already used"}, 401
     recovery.used_at = datetime.now(timezone.utc)
-    return complete_factor_login(user)
+    return complete_factor_login(user, data["challenge_token"])
 
 
 @auth_bp.route("/two-factor/methods", methods=["GET"])
@@ -991,7 +1065,6 @@ def complete_passkey_authentication():
     now = datetime.now(timezone.utc)
     if (
         not user
-        or not user.totp_enabled
         or not challenge
         or as_utc(challenge.expires_at) <= now
     ):
@@ -1024,7 +1097,7 @@ def complete_passkey_authentication():
     credential.sign_count = verification.new_sign_count
     credential.last_used_at = now
     challenge.consumed_at = now
-    return complete_factor_login(user)
+    return complete_factor_login(user, login_token)
 
 
 @auth_bp.route("/google-login", methods=["POST"])
@@ -1086,11 +1159,241 @@ def google_login():
         db.session.add(user)
     elif not user.google_sub:
         user.google_sub = google_sub
+    if not user.email_verified_at:
+        user.email_verified_at = datetime.now(timezone.utc)
     db.session.commit()
 
     if current_app.config.get("REQUIRE_TWO_FACTOR"):
         return factor_required_response(user), 200
     return {"message": "Login successful", **authentication_response(user)}, 200
+
+
+def github_oauth_configured():
+    return all(
+        current_app.config.get(key)
+        for key in (
+            "GITHUB_CLIENT_ID",
+            "GITHUB_CLIENT_SECRET",
+            "GITHUB_REDIRECT_URI",
+        )
+    )
+
+
+def github_callback_response(body, status=200):
+    response = jsonify(body)
+    redirect_uri = current_app.config.get("GITHUB_REDIRECT_URI") or ""
+    response.delete_cookie(
+        "github_oauth_state",
+        path="/api/auth/github-login",
+        secure=redirect_uri.startswith("https://"),
+        httponly=True,
+        samesite="Lax",
+    )
+    return response, status
+
+
+@auth_bp.route("/github-login/config", methods=["GET"])
+def github_login_config():
+    return {"configured": github_oauth_configured()}, 200
+
+
+@auth_bp.route("/github-login/start", methods=["POST"])
+def github_login_start():
+    if not github_oauth_configured():
+        return {"error": "GitHub sign-in is not configured"}, 503
+
+    state = secrets.token_urlsafe(32)
+    authorization_url = "https://github.com/login/oauth/authorize?" + urlencode(
+        {
+            "client_id": current_app.config["GITHUB_CLIENT_ID"],
+            "redirect_uri": current_app.config["GITHUB_REDIRECT_URI"],
+            "scope": "read:user user:email",
+            "state": state,
+        }
+    )
+    response = jsonify({"authorization_url": authorization_url})
+    response.set_cookie(
+        "github_oauth_state",
+        state,
+        max_age=FACTOR_CHALLENGE_MAX_AGE_SECONDS,
+        httponly=True,
+        secure=current_app.config["GITHUB_REDIRECT_URI"].startswith("https://"),
+        samesite="Lax",
+        path="/api/auth/github-login",
+    )
+    return response, 200
+
+
+@auth_bp.route("/github-login", methods=["POST"])
+def github_login():
+    if not github_oauth_configured():
+        return github_callback_response(
+            {"error": "GitHub sign-in is not configured"}, 503
+        )
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return github_callback_response({"error": "Request body must be valid JSON"}, 400)
+    code = data.get("code")
+    state = data.get("state")
+    role = normalize_role(data.get("role"))
+    state_cookie = request.cookies.get("github_oauth_state")
+    if (
+        not isinstance(code, str)
+        or not code
+        or len(code) > 2048
+        or not isinstance(state, str)
+        or not state.isascii()
+        or len(state) > 256
+        or not state_cookie
+        or not state_cookie.isascii()
+        or not hmac.compare_digest(state, state_cookie)
+    ):
+        return github_callback_response(
+            {"error": "The GitHub sign-in session is invalid or expired"}, 401
+        )
+
+    try:
+        token_response = requests.post(
+            "https://github.com/login/oauth/access_token",
+            data={
+                "client_id": current_app.config["GITHUB_CLIENT_ID"],
+                "client_secret": current_app.config["GITHUB_CLIENT_SECRET"],
+                "code": code,
+                "redirect_uri": current_app.config["GITHUB_REDIRECT_URI"],
+            },
+            headers={"Accept": "application/json"},
+            timeout=10,
+        )
+        if token_response.status_code != 200:
+            return github_callback_response(
+                {"error": "GitHub sign-in could not be verified"}, 401
+            )
+        token_data = token_response.json()
+        if not isinstance(token_data, dict):
+            return github_callback_response(
+                {"error": "GitHub sign-in could not be verified"}, 401
+            )
+        access_token = token_data.get("access_token")
+        if not isinstance(access_token, str) or not access_token:
+            return github_callback_response(
+                {"error": "GitHub sign-in could not be verified"}, 401
+            )
+
+        github_headers = {
+            "Accept": "application/vnd.github+json",
+            "Authorization": f"Bearer {access_token}",
+            "User-Agent": "Rental-Management-System",
+        }
+        profile_response = requests.get(
+            "https://api.github.com/user", headers=github_headers, timeout=10
+        )
+        emails_response = requests.get(
+            "https://api.github.com/user/emails",
+            headers=github_headers,
+            timeout=10,
+        )
+        if profile_response.status_code != 200 or emails_response.status_code != 200:
+            return github_callback_response(
+                {"error": "GitHub account details could not be verified"}, 401
+            )
+        profile = profile_response.json()
+        emails = emails_response.json()
+    except requests.RequestException:
+        current_app.logger.warning("GitHub sign-in could not reach the provider")
+        return github_callback_response(
+            {"error": "GitHub sign-in is temporarily unavailable"}, 502
+        )
+    except (TypeError, ValueError):
+        current_app.logger.warning("GitHub returned invalid sign-in data")
+        return github_callback_response(
+            {"error": "GitHub account details could not be verified"}, 401
+        )
+
+    if not isinstance(profile, dict) or not isinstance(emails, list):
+        return github_callback_response(
+            {"error": "GitHub account details could not be verified"}, 401
+        )
+    github_id = profile.get("id")
+    github_login_name = profile.get("login")
+    github_name = profile.get("name")
+    if (
+        isinstance(github_id, bool)
+        or not isinstance(github_id, (str, int))
+        or not str(github_id)
+    ):
+        return github_callback_response(
+            {"error": "GitHub account details could not be verified"}, 401
+        )
+    if not isinstance(github_name, str) or not github_name.strip():
+        github_name = github_login_name
+    if not isinstance(github_name, str) or not github_name.strip():
+        return github_callback_response(
+            {"error": "GitHub account details could not be verified"}, 401
+        )
+    verified_email = next(
+        (
+            item.get("email")
+            for item in emails
+            if isinstance(item, dict)
+            and item.get("primary") is True
+            and item.get("verified") is True
+            and isinstance(item.get("email"), str)
+        ),
+        None,
+    )
+    if not verified_email:
+        return github_callback_response(
+            {"error": "GitHub must provide a verified primary email address"}, 401
+        )
+    verified_email = verified_email.strip()
+    if (
+        not verified_email
+        or len(verified_email) > 120
+        or "@" not in verified_email
+        or "." not in verified_email.split("@")[-1]
+    ):
+        return github_callback_response(
+            {"error": "GitHub must provide a verified primary email address"}, 401
+        )
+
+    email = verified_email.strip().lower()
+    github_sub = str(github_id)
+    user = User.query.filter_by(github_sub=github_sub).first()
+    email_user = User.query.filter_by(email=email).first()
+    if user and email_user and user.id != email_user.id:
+        return github_callback_response(
+            {"error": "This GitHub account cannot be linked to that email"}, 409
+        )
+    if not user:
+        user = email_user
+        if user and user.github_sub and user.github_sub != github_sub:
+            return github_callback_response(
+                {"error": "A different GitHub account is already linked"}, 409
+            )
+
+    if not user:
+        if role not in {"landlord", "tenant"}:
+            return github_callback_response(
+                {"error": "Choose an account type before signing in with GitHub"}, 400
+            )
+        user = User(
+            name=github_name.strip()[:120],
+            email=email,
+            role=role,
+            github_sub=github_sub,
+        )
+        db.session.add(user)
+    elif not user.github_sub:
+        user.github_sub = github_sub
+    if not user.email_verified_at:
+        user.email_verified_at = datetime.now(timezone.utc)
+    db.session.commit()
+
+    if current_app.config.get("REQUIRE_TWO_FACTOR"):
+        return github_callback_response(factor_required_response(user))
+    return github_callback_response(
+        {"message": "Login successful", **authentication_response(user)}
+    )
 
 
 @auth_bp.route("/refresh", methods=["POST"])

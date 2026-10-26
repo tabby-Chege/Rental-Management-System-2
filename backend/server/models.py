@@ -12,6 +12,8 @@ class User(db.Model):
     password_hash = db.Column(db.String(255), nullable=True)
     role = db.Column(db.String(20), nullable=False, default="tenant")
     google_sub = db.Column(db.String(255), unique=True, nullable=True)
+    github_sub = db.Column(db.String(255), unique=True, nullable=True)
+    email_verified_at = db.Column(db.DateTime(timezone=True), nullable=True)
     totp_secret = db.Column(db.Text, nullable=True)
     totp_pending_secret = db.Column(db.Text, nullable=True)
     totp_enabled = db.Column(db.Boolean, nullable=False, default=False, server_default="0")
@@ -42,6 +44,7 @@ class User(db.Model):
             "id": self.id,
             "name": self.name,
             "email": self.email,
+            "email_verified": self.email_verified_at is not None,
             "role": self.role,
             "created_at": self.created_at.isoformat(),
         }
@@ -73,8 +76,10 @@ class Payment(db.Model):
 
     id = db.Column(db.Integer, primary_key=True)
     lease_id = db.Column(db.Integer, db.ForeignKey("leases.id"), nullable=False)
-    amount = db.Column(db.Numeric(12, 3), nullable=False)
-    currency = db.Column(db.String(3), nullable=False, default="KES", server_default="KES")
+    # Legacy payments predate currency/provider/type metadata; keep those fields
+    # nullable rather than assigning unsupported historical values.
+    amount = db.Column(db.Float, nullable=False)
+    currency = db.Column(db.String(3), nullable=True)
     payment_date = db.Column(
         db.DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),
@@ -83,9 +88,9 @@ class Payment(db.Model):
     payment_method = db.Column(db.String(50), nullable=False)  # M-Pesa, Bank Transfer, Cash
     status = db.Column(db.String(20), default='Completed', nullable=False)  # Completed, Pending, Failed
     reference_code = db.Column(db.String(100), unique=True, nullable=True)  # Transaction reference
-    provider = db.Column(db.String(40), nullable=False, default="manual", server_default="manual")
+    provider = db.Column(db.String(40), nullable=True)
     provider_reference = db.Column(db.String(160), nullable=True)
-    payment_type = db.Column(db.String(20), nullable=False, default="rent", server_default="rent")
+    payment_type = db.Column(db.String(20), nullable=True)
 
     lease = db.relationship(
         "Lease",

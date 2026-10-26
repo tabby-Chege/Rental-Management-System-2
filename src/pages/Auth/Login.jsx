@@ -10,7 +10,10 @@ import {
   beginPasskeyAuthentication,
   completeTwoFactor,
   completePasskeyAuthentication,
+  beginGitHubLogin,
+  getGitHubOAuthConfig,
   loginUser,
+  loginWithGitHub,
   loginWithGoogle,
   sendLoginFactorCode,
   verifyLoginFactorCode,
@@ -22,14 +25,20 @@ function Login() {
   const googleButtonRef = useRef(null);
   const totpQrRef = useRef(null);
   const googleCredentialHandler = useRef(null);
+  const githubCallbackHandler = useRef(null);
   const [googleScriptReady, setGoogleScriptReady] = useState(false);
+  const [githubOAuthAvailable, setGithubOAuthAvailable] = useState(false);
   const [factorChallenge, setFactorChallenge] = useState(null);
   const [factorSetup, setFactorSetup] = useState(null);
   const [factorCode, setFactorCode] = useState("");
   const [selectedFactor, setSelectedFactor] = useState("totp");
   const [factorCodeRequested, setFactorCodeRequested] = useState(false);
+  const [factorCodeExpiresAt, setFactorCodeExpiresAt] = useState(null);
+  const [factorResendAvailableAt, setFactorResendAvailableAt] = useState(null);
+  const [currentTime, setCurrentTime] = useState(0);
   const [googleCredential, setGoogleCredential] = useState("");
   const [googleRole, setGoogleRole] = useState("landlord");
+  const [githubRole, setGithubRole] = useState("landlord");
   const [googleRoleRequired, setGoogleRoleRequired] = useState(false);
 
   const [formData, setFormData] = useState({
@@ -40,6 +49,23 @@ function Login() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const googleClientId = import.meta.env.VITE_GOOGLE_CLIENT_ID;
+  const [oauthCallbackError] = useState(() => {
+    const params = new URLSearchParams(window.location.search);
+    const code = params.get("code");
+    const providerError = params.get("error_description") || params.get("error");
+    if (providerError) {
+      return "GitHub sign-in was cancelled or could not be completed.";
+    }
+    if (
+      code &&
+      (!params.get("state") ||
+        !sessionStorage.getItem("github_oauth_state") ||
+        params.get("state") !== sessionStorage.getItem("github_oauth_state"))
+    ) {
+      return "The GitHub sign-in session is invalid or expired. Please try again.";
+    }
+    return "";
+  });
 
   useEffect(() => {
     if (!factorSetup?.provisioning_uri || !totpQrRef.current) return undefined;
@@ -60,16 +86,24 @@ function Login() {
   }, [factorSetup]);
 
   useEffect(() => {
-    if (!googleClientId) return undefined;
-    const script = document.createElement("script");
-    script.src = "https://accounts.google.com/gsi/client";
-    script.async = true;
-    script.defer = true;
-    script.onload = () => setGoogleScriptReady(true);
-    script.onerror = () => setError("Google sign-in could not be loaded.");
-    document.head.appendChild(script);
-    return () => script.remove();
-  }, [googleClientId]);
+    let cancelled = false;
+    getGitHubOAuthConfig()
+      .then(({ configured }) => {
+        if (!cancelled) setGithubOAuthAvailable(configured === true);
+      })
+      .catch(() => {
+        if (!cancelled) setGithubOAuthAvailable(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!factorCodeRequested) return undefined;
+    const timer = window.setInterval(() => setCurrentTime(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [factorCodeRequested]);
 
   useEffect(() => {
     if (!googleScriptReady || !googleClientId || !googleButtonRef.current) return;
@@ -101,9 +135,14 @@ function Login() {
       token: response.challenge_token,
       setup: Boolean(response.mfa_setup_required),
       methods: response.methods || [],
+      totpSetupAvailable: response.totp_setup_available === true,
     });
-    setSelectedFactor(response.methods?.[0]?.id || "totp");
+    setSelectedFactor(
+      response.methods?.[0]?.id || (response.mfa_setup_required ? "totp" : ""),
+    );
     setFactorCodeRequested(false);
+    setFactorCodeExpiresAt(null);
+    setFactorResendAvailableAt(null);
     setFactorCode("");
     setFactorSetup(null);
     if (response.mfa_setup_required) {
@@ -146,13 +185,57 @@ function Login() {
     }
   }
 
+  async function handleGitHubCredential(code, state, role) {
+    setError("");
+    setLoading(true);
+    try {
+      const response = await loginWithGitHub(code, state, role);
+      await finishAuthentication(response);
+    } catch (requestError) {
+      setError(requestError.message || "GitHub sign-in failed.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
   useEffect(() => {
     googleCredentialHandler.current = (credential) => {
       setGoogleCredential(credential);
       setGoogleRoleRequired(false);
       void handleGoogleCredential(credential);
     };
+    githubCallbackHandler.current = (code, state, role) => {
+      void handleGitHubCredential(code, state, role);
+    };
   });
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const code = params.get("code");
+    const state = params.get("state");
+    const providerError = params.get("error_description") || params.get("error");
+    if (!code && !providerError) return;
+
+    const expectedState = sessionStorage.getItem("github_oauth_state");
+    const role = sessionStorage.getItem("github_oauth_role") || "landlord";
+    sessionStorage.removeItem("github_oauth_state");
+    sessionStorage.removeItem("github_oauth_role");
+    window.history.replaceState({}, "", window.location.pathname);
+    if (providerError || !state || !expectedState || state !== expectedState) return;
+    githubCallbackHandler.current?.(code, state, role);
+  }, []);
+
+  useEffect(() => {
+    if (!googleClientId) return undefined;
+    const script = document.createElement("script");
+    script.src = "https://accounts.google.com/gsi/client";
+    script.async = true;
+    script.defer = true;
+    script.onload = () => setGoogleScriptReady(true);
+    script.onerror = () => setError("Google sign-in could not be loaded.");
+    document.head.appendChild(script);
+    return () => script.remove();
+  }, [googleClientId]);
 
   function handleChange(event) {
     setFormData({
@@ -202,7 +285,11 @@ function Login() {
       }
       finishSignIn(response.user);
     } catch (requestError) {
-      setError(requestError.message || "The authenticator code could not be verified.");
+      setError(
+        requestError.message?.includes("invalid or expired")
+          ? "The code is invalid or expired. Request a new email code or try the current authenticator code."
+          : requestError.message || "The authenticator code could not be verified.",
+      );
     } finally {
       setLoading(false);
     }
@@ -212,9 +299,16 @@ function Login() {
     setError("");
     setLoading(true);
     try {
-      await sendLoginFactorCode(factorChallenge.token, selectedFactor);
+      const response = await sendLoginFactorCode(factorChallenge.token, selectedFactor);
       setFactorCodeRequested(true);
       setFactorCode("");
+      setCurrentTime(Date.now());
+      setFactorCodeExpiresAt(
+        Date.now() + (response.expires_in_seconds || 300) * 1000,
+      );
+      setFactorResendAvailableAt(
+        Date.now() + (response.resend_after_seconds || 30) * 1000,
+      );
     } catch (requestError) {
       setError(requestError.message || "The verification code could not be sent.");
     } finally {
@@ -252,6 +346,61 @@ function Login() {
     event.preventDefault();
     await handleGoogleCredential(googleCredential, googleRole);
   }
+
+  async function handleGitHubStart() {
+    setError("");
+    setLoading(true);
+    try {
+      const { authorization_url: authorizationUrl } = await beginGitHubLogin();
+      const authorizationState = new URL(authorizationUrl).searchParams.get("state");
+      if (!authorizationState) {
+        throw new Error("GitHub sign-in could not be started.");
+      }
+      sessionStorage.setItem("github_oauth_state", authorizationState);
+      sessionStorage.setItem("github_oauth_role", githubRole);
+      window.location.assign(authorizationUrl);
+    } catch (requestError) {
+      setError(requestError.message || "GitHub sign-in could not be started.");
+      setLoading(false);
+    }
+  }
+
+  async function handleSelectFactor(methodId) {
+    setSelectedFactor(methodId);
+    setFactorCode("");
+    setFactorCodeRequested(false);
+    setFactorCodeExpiresAt(null);
+    setFactorResendAvailableAt(null);
+    if (methodId !== "totp_setup") return;
+
+    setError("");
+    setLoading(true);
+    try {
+      const setup = await beginTwoFactorSetup(factorChallenge.token);
+      setFactorSetup(setup);
+      setFactorChallenge((current) => ({ ...current, setup: true }));
+      setSelectedFactor("totp");
+    } catch (requestError) {
+      setError(requestError.message || "Could not start authenticator setup.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  const visibleFactorMethods = factorChallenge
+    ? [
+        ...factorChallenge.methods,
+        ...(factorChallenge.totpSetupAvailable
+          ? [{ id: "totp_setup", label: "Set up authenticator app" }]
+          : []),
+      ]
+    : [];
+  const factorCodeExpired = (
+    factorCodeExpiresAt !== null && currentTime >= factorCodeExpiresAt
+  );
+  const resendSeconds = factorResendAvailableAt
+    ? Math.max(0, Math.ceil((factorResendAvailableAt - currentTime) / 1000))
+    : 0;
 
   return (
     <section className="auth-page">
@@ -291,16 +440,18 @@ function Login() {
           <p className="auth-description">
             {factorChallenge
               ? factorChallenge.setup
-                ? "Authenticator verification is required to protect every account."
-                : "Enter the current code from your authenticator app to continue."
+                ? factorChallenge.totpSetupAvailable
+                  ? "Set up an authenticator app, or return to email verification."
+                  : "Set up an authenticator app to protect your account."
+                : "Choose an available method: use your authenticator app or request an email code."
               : googleRoleRequired
                 ? "Choose how you’ll use Property Finder. This will be your account type."
                 : "Log in to continue to your rental workspace."}
           </p>
 
-          {error && (
+          {(error || oauthCallbackError) && (
             <p className="auth-error" role="alert">
-              {error}
+              {error || oauthCallbackError}
             </p>
           )}
 
@@ -345,17 +496,14 @@ function Login() {
                 <>
                   <fieldset className="auth-factor-options">
                     <legend>Choose a verification method</legend>
-                    {factorChallenge.methods.map((method) => (
+                    {visibleFactorMethods.map((method) => (
                       <button
                         type="button"
                         key={method.id}
                         className={selectedFactor === method.id ? "is-selected" : ""}
                         aria-pressed={selectedFactor === method.id}
-                        onClick={() => {
-                          setSelectedFactor(method.id);
-                          setFactorCode("");
-                          setFactorCodeRequested(false);
-                        }}
+                        disabled={loading}
+                        onClick={() => handleSelectFactor(method.id)}
                       >
                         {method.label}
                       </button>
@@ -365,7 +513,7 @@ function Login() {
                     <button
                       type="button"
                       onClick={handlePasskeySignIn}
-                      disabled={loading}
+                      disabled={loading || (factorCodeRequested && resendSeconds > 0)}
                     >
                       {loading ? "Waiting for passkey..." : "Continue with passkey"}
                     </button>
@@ -380,11 +528,26 @@ function Login() {
                         >
                           {loading
                             ? "Sending..."
-                            : factorCodeRequested
-                              ? "Send another code"
+                            : factorCodeRequested && resendSeconds > 0
+                              ? `Resend in ${resendSeconds}s`
+                              : factorCodeRequested
+                                ? "Request a new code"
                               : `Send ${selectedFactor === "sms" ? "text" : "email"} code`}
                         </button>
                       )}
+                      {(selectedFactor === "email" || selectedFactor === "sms") &&
+                        factorCodeRequested && (
+                          <p className="auth-password-hint" role="status">
+                            {factorCodeExpired
+                              ? "This code has expired. Request a new code to continue."
+                              : `A code was ${selectedFactor === "email" ? "queued for email delivery" : "sent"}. It expires in ${
+                                  Math.max(
+                                    0,
+                                    Math.ceil((factorCodeExpiresAt - currentTime) / 60000),
+                                  )
+                                } minute(s).`}
+                          </p>
+                        )}
                       {(selectedFactor === "totp" ||
                         selectedFactor === "recovery" ||
                         factorCodeRequested) && (
@@ -429,7 +592,7 @@ function Login() {
                   loading ||
                   (factorChallenge.setup && !factorSetup) ||
                   ((selectedFactor === "email" || selectedFactor === "sms") &&
-                    !factorCodeRequested) ||
+                    (!factorCodeRequested || factorCodeExpired)) ||
                   selectedFactor === "passkey"
                 }
               >
@@ -440,12 +603,31 @@ function Login() {
                     : "Verify and log in"}
                 {!loading && selectedFactor !== "passkey" && <span aria-hidden="true">→</span>}
               </button>
+              {factorChallenge.setup &&
+                factorChallenge.totpSetupAvailable &&
+                factorChallenge.methods.some((method) => method.id === "email") && (
+                  <button
+                    type="button"
+                    className="auth-secondary-button"
+                    onClick={() => {
+                      setFactorChallenge((current) => ({ ...current, setup: false }));
+                      setFactorSetup(null);
+                      setSelectedFactor("email");
+                      setError("");
+                    }}
+                  >
+                    Use email verification instead
+                  </button>
+                )}
               <button
                 type="button"
                 className="auth-secondary-button"
                 onClick={() => {
                   setFactorChallenge(null);
                   setFactorSetup(null);
+                  setFactorCodeRequested(false);
+                  setFactorCodeExpiresAt(null);
+                  setFactorResendAvailableAt(null);
                   setError("");
                 }}
               >
@@ -501,16 +683,39 @@ function Login() {
             </form>
           )}
 
-          {!factorChallenge && !googleRoleRequired && googleClientId && (
+          {!factorChallenge &&
+            !googleRoleRequired &&
+            (googleClientId || githubOAuthAvailable) && (
             <>
               <div className="auth-divider"><span>or</span></div>
-              {googleScriptReady ? (
+              {googleClientId && (googleScriptReady ? (
                 <div className="google-signin-button" ref={googleButtonRef} />
               ) : (
                 <p className="auth-password-hint" role="status">Loading Google sign-in…</p>
+              ))}
+              {githubOAuthAvailable && (
+                <>
+                  <label htmlFor="github-role">Account type for a new GitHub account</label>
+                  <select
+                    id="github-role"
+                    value={githubRole}
+                    onChange={(event) => setGithubRole(event.target.value)}
+                  >
+                    <option value="landlord">Landlord</option>
+                    <option value="tenant">Tenant</option>
+                  </select>
+                  <button
+                    type="button"
+                    className="auth-secondary-button"
+                    onClick={handleGitHubStart}
+                    disabled={loading}
+                  >
+                    {loading ? "Opening GitHub…" : "Continue with GitHub"}
+                  </button>
+                </>
               )}
             </>
-          )}
+            )}
 
           {!factorChallenge && !googleRoleRequired && (
             <p className="auth-switch">

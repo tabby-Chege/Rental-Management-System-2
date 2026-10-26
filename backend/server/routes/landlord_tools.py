@@ -115,6 +115,20 @@ def list_maintenance_requests():
         query = query.filter(Property.owner_id == user.id)
     elif user.role != "admin":
         return {"error": "Only tenants and landlords can view maintenance requests"}, 403
+    property_id_value = request.args.get("property_id")
+    if property_id_value:
+        try:
+            property_id = int(property_id_value)
+        except ValueError:
+            return {"error": "property_id must be a positive integer"}, 400
+        if property_id < 1:
+            return {"error": "property_id must be a positive integer"}, 400
+        property_record = db.session.get(Property, property_id)
+        if not property_record or (
+            user.role == "landlord" and property_record.owner_id != user.id
+        ):
+            return {"error": "Property not found"}, 404
+        query = query.filter(Property.id == property_id)
     status = request.args.get("status")
     if status:
         if status not in MAINTENANCE_STATUSES:

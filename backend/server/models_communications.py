@@ -11,7 +11,10 @@ class PropertyConversation(db.Model):
     __tablename__ = "property_conversations"
     __table_args__ = (
         db.UniqueConstraint(
-            "property_id", "tenant_user_id", name="uq_property_conversation_tenant"
+            "property_id",
+            "tenant_user_id",
+            "context_key",
+            name="uq_property_conversation_context",
         ),
     )
 
@@ -22,6 +25,15 @@ class PropertyConversation(db.Model):
     tenant_user_id = db.Column(
         db.Integer, db.ForeignKey("users.id"), nullable=False, index=True
     )
+    unit_id = db.Column(db.Integer, db.ForeignKey("units.id"), nullable=True, index=True)
+    application_id = db.Column(
+        db.Integer, db.ForeignKey("applications.id"), nullable=True, index=True
+    )
+    context_key = db.Column(
+        db.String(64), nullable=False, default="property", server_default="property"
+    )
+    tenant_read_at = db.Column(db.DateTime(timezone=True))
+    landlord_read_at = db.Column(db.DateTime(timezone=True))
     created_at = db.Column(db.DateTime(timezone=True), default=utc_now, nullable=False)
     updated_at = db.Column(db.DateTime(timezone=True), default=utc_now, nullable=False)
 

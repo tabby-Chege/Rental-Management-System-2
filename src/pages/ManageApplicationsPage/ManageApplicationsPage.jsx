@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 import {
   confirmReservationPayment,
   decideApplication,
@@ -285,6 +286,12 @@ function ManageApplicationsPage() {
               <span className={`manage-badge is-${application.status}`}>
                 {application.status}
               </span>
+              <Link
+                className="manage-button is-secondary"
+                to={`/messages?tenant_user_id=${application.applicant_user_id}&property_id=${application.property?.id ?? ""}&unit_id=${application.unit_id}&application_id=${application.id}`}
+              >
+                Message applicant
+              </Link>
               {application.status === "pending" || application.status === "waitlisted" ? (
                 <>
                   <div className="manage-actions">

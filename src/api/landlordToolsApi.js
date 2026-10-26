@@ -1,8 +1,13 @@
 import { authenticatedFetch } from "./authAPI.js";
 import { request } from "./client.js";
 
-export function listMaintenanceRequests() {
-  return request("/api/maintenance").then((data) => data.requests);
+export function listMaintenanceRequests({ propertyId } = {}) {
+  const params = new URLSearchParams();
+  if (propertyId) params.set("property_id", String(propertyId));
+  const query = params.toString();
+  return request(`/api/maintenance${query ? `?${query}` : ""}`).then(
+    (data) => data.requests,
+  );
 }
 
 export function createMaintenanceRequest(values) {

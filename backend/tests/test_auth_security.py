@@ -231,6 +231,154 @@ def test_google_login_requires_configuration_and_role_for_new_users(client, monk
     assert user.role == "tenant"
 
 
+def test_google_login_uses_verified_email_mfa_policy(client, monkeypatch):
+    from server.routes import auth
+
+    client.application.config.update(
+        REQUIRE_TWO_FACTOR=True,
+        GOOGLE_CLIENT_ID="test-client-id",
+        SMTP_HOST="smtp.example.com",
+        SMTP_FROM_ADDRESS="security@example.com",
+    )
+    monkeypatch.setattr(
+        auth.id_token,
+        "verify_oauth2_token",
+        lambda *_args, **_kwargs: {
+            "email": "google-mfa@example.com",
+            "email_verified": True,
+            "sub": "google-mfa-subject",
+            "name": "Google MFA User",
+        },
+    )
+
+    response = client.post(
+        "/api/auth/google-login",
+        json={"credential": "verified-google-token", "role": "tenant"},
+    )
+    data = response.get_json()
+    assert response.status_code == 200
+    assert data["mfa_required"] is True
+    assert data["methods"][0]["id"] == "email"
+    assert "access_token" not in data
+    user = User.query.filter_by(email="google-mfa@example.com").one()
+    assert user.email_verified_at is not None
+
+
+def test_github_login_requires_state_and_applies_required_mfa(client, monkeypatch):
+    from urllib.parse import parse_qs, urlparse
+
+    from server.routes import auth
+
+    client.application.config.update(
+        REQUIRE_TWO_FACTOR=True,
+        GITHUB_CLIENT_ID="github-client-id",
+        GITHUB_CLIENT_SECRET="github-client-secret",
+        GITHUB_REDIRECT_URI="http://localhost:5173/login",
+        SMTP_HOST="smtp.example.com",
+        SMTP_FROM_ADDRESS="security@example.com",
+    )
+    start = client.post("/api/auth/github-login/start", json={})
+    assert start.status_code == 200
+    authorization_url = start.get_json()["authorization_url"]
+    state = parse_qs(urlparse(authorization_url).query)["state"][0]
+    assert "user%3Aemail" in authorization_url
+
+    class FakeResponse:
+        def __init__(self, payload, status_code=200):
+            self.payload = payload
+            self.status_code = status_code
+
+        def json(self):
+            return self.payload
+
+    def fake_post(url, **kwargs):
+        assert url == "https://github.com/login/oauth/access_token"
+        assert kwargs["data"]["code"] == "one-time-code"
+        return FakeResponse({"access_token": "provider-access"})
+
+    def fake_get(url, **kwargs):
+        assert kwargs["headers"]["Authorization"] == "Bearer provider-access"
+        if url == "https://api.github.com/user":
+            return FakeResponse({"id": 123, "login": "github-user", "name": None})
+        assert url == "https://api.github.com/user/emails"
+        return FakeResponse(
+            [
+                {
+                    "email": "github-mfa@example.com",
+                    "primary": True,
+                    "verified": True,
+                }
+            ]
+        )
+
+    monkeypatch.setattr(auth.requests, "post", fake_post)
+    monkeypatch.setattr(auth.requests, "get", fake_get)
+    response = client.post(
+        "/api/auth/github-login",
+        json={"code": "one-time-code", "state": state, "role": "tenant"},
+    )
+
+    data = response.get_json()
+    assert response.status_code == 200
+    assert data["mfa_required"] is True
+    assert data["methods"][0]["id"] == "email"
+    assert "access_token" not in data
+    user = User.query.filter_by(email="github-mfa@example.com").one()
+    assert user.github_sub == "123"
+    assert user.email_verified_at is not None
+
+    sent = []
+    monkeypatch.setattr(
+        auth,
+        "queue_email",
+        lambda *args, **kwargs: sent.append(args),
+    )
+    requested = client.post(
+        "/api/auth/two-factor/code/send",
+        json={
+            "challenge_token": data["challenge_token"],
+            "method": "email",
+        },
+    )
+    assert requested.status_code == 200
+    code = sent[0][3].split("Your verification code is ", 1)[1][:6]
+    completed = client.post(
+        "/api/auth/two-factor/code/verify",
+        json={
+            "challenge_token": data["challenge_token"],
+            "method": "email",
+            "code": code,
+        },
+    )
+    assert completed.status_code == 200
+    assert client.get(
+        "/api/auth/me",
+        headers={"Authorization": f"Bearer {completed.get_json()['access_token']}"},
+    ).status_code == 200
+
+
+def test_github_login_rejects_oauth_state_mismatch(client, monkeypatch):
+    from server.routes import auth
+
+    client.application.config.update(
+        GITHUB_CLIENT_ID="github-client-id",
+        GITHUB_CLIENT_SECRET="github-client-secret",
+        GITHUB_REDIRECT_URI="http://localhost:5173/login",
+    )
+    monkeypatch.setattr(
+        auth.requests,
+        "post",
+        lambda *_args, **_kwargs: pytest.fail("OAuth code must not be exchanged"),
+    )
+    client.post("/api/auth/github-login/start", json={})
+    response = client.post(
+        "/api/auth/github-login",
+        json={"code": "one-time-code", "state": "attacker-state", "role": "tenant"},
+    )
+    assert response.status_code == 401
+    assert "access_token" not in response.get_json()
+
+
 def enroll_authenticator(client, email):
     challenge = client.post(
         "/api/auth/login",
@@ -271,6 +419,9 @@ def test_email_code_is_hashed_limited_and_single_use(client, world, monkeypatch)
         SMTP_FROM_ADDRESS="security@example.com",
     )
     enroll_authenticator(client, "lana@x.com")
+    user = db.session.get(User, world["ids"]["landlord"])
+    user.email_verified_at = datetime.now(timezone.utc)
+    db.session.commit()
     challenge = start_factor_login(client, "lana@x.com")
     sent = []
     monkeypatch.setattr(
@@ -292,6 +443,10 @@ def test_email_code_is_hashed_limited_and_single_use(client, world, monkeypatch)
     code = sent[0][3].split("Your verification code is ", 1)[1][:6]
     otp = auth.AuthOtpChallenge.query.one()
     assert code not in otp.code_hash
+    assert code not in str(requested.get_json())
+    assert (
+        auth.as_utc(otp.expires_at) - auth.as_utc(otp.created_at)
+    ).total_seconds() == 300
 
     verified = client.post(
         "/api/auth/two-factor/code/verify",
@@ -324,6 +479,207 @@ def test_email_code_is_hashed_limited_and_single_use(client, world, monkeypatch)
             "code": code,
         },
     ).status_code == 401
+    assert client.post(
+        "/api/auth/two-factor/code/send",
+        json={
+            "challenge_token": challenge["challenge_token"],
+            "method": "email",
+        },
+    ).status_code == 401
+
+
+def test_unverified_email_is_not_an_email_factor_for_totp_users(client, world):
+    client.application.config.update(
+        REQUIRE_TWO_FACTOR=True,
+        SMTP_HOST="smtp.example.com",
+        SMTP_FROM_ADDRESS="security@example.com",
+    )
+    enroll_authenticator(client, "lana@x.com")
+    challenge = start_factor_login(client, "lana@x.com")
+
+    assert "email" not in {method["id"] for method in challenge["methods"]}
+    sent = client.post(
+        "/api/auth/two-factor/code/send",
+        json={
+            "challenge_token": challenge["challenge_token"],
+            "method": "email",
+        },
+    )
+    assert sent.status_code == 400
+    assert "verified email" in sent.get_json()["error"]
+
+
+def test_first_email_factor_verifies_email_and_issues_jwt_only_after_code(
+    client, world, monkeypatch
+):
+    from server.routes import auth
+
+    client.application.config.update(
+        REQUIRE_TWO_FACTOR=True,
+        SMTP_HOST="smtp.example.com",
+        SMTP_FROM_ADDRESS="security@example.com",
+    )
+    challenge = start_factor_login(client, "lana@x.com")
+    data = challenge
+    assert data["mfa_required"] is True
+    assert data["methods"] == [
+        {"id": "email", "label": "Verify email (l***@x.com)"}
+    ]
+    assert "access_token" not in data
+
+    sent = []
+    monkeypatch.setattr(
+        auth,
+        "queue_email",
+        lambda *args, **kwargs: sent.append(args),
+    )
+    requested = client.post(
+        "/api/auth/two-factor/code/send",
+        json={"challenge_token": data["challenge_token"], "method": "email"},
+    )
+    assert requested.status_code == 200
+    code = sent[0][3].split("Your verification code is ", 1)[1][:6]
+    assert code not in str(requested.get_json())
+
+    verified = client.post(
+        "/api/auth/two-factor/code/verify",
+        json={
+            "challenge_token": data["challenge_token"],
+            "method": "email",
+            "code": code,
+        },
+    )
+    assert verified.status_code == 200
+    assert verified.get_json()["access_token"]
+    user = db.session.get(User, world["ids"]["landlord"])
+    assert user.email_verified_at is not None
+    assert client.get(
+        "/api/auth/me",
+        headers={"Authorization": f"Bearer {verified.get_json()['access_token']}"},
+    ).status_code == 200
+
+
+def test_email_otp_attempt_limit_and_expiry(client, world, monkeypatch):
+    from server.routes import auth
+
+    client.application.config.update(
+        REQUIRE_TWO_FACTOR=True,
+        SMTP_HOST="smtp.example.com",
+        SMTP_FROM_ADDRESS="security@example.com",
+    )
+    user = db.session.get(User, world["ids"]["landlord"])
+    user.email_verified_at = datetime.now(timezone.utc)
+    db.session.commit()
+    challenge = start_factor_login(client, "lana@x.com")
+    sent = []
+    monkeypatch.setattr(
+        auth,
+        "queue_email",
+        lambda *args, **kwargs: sent.append(args),
+    )
+    client.post(
+        "/api/auth/two-factor/code/send",
+        json={"challenge_token": challenge["challenge_token"], "method": "email"},
+    )
+    otp = AuthOtpChallenge.query.one()
+
+    for _ in range(auth.OTP_MAX_ATTEMPTS):
+        invalid = client.post(
+            "/api/auth/two-factor/code/verify",
+            json={
+                "challenge_token": challenge["challenge_token"],
+                "method": "email",
+                "code": "000000",
+            },
+        )
+        assert invalid.status_code == 401
+        assert "access_token" not in invalid.get_json()
+    db.session.refresh(otp)
+    assert otp.attempts == auth.OTP_MAX_ATTEMPTS
+    assert otp.consumed_at is not None
+
+    user.failed_login_attempts = 0
+    user.login_attempt_window_started_at = None
+    user.locked_until = None
+    db.session.commit()
+    second_challenge = start_factor_login(client, "lana@x.com")
+    client.post(
+        "/api/auth/two-factor/code/send",
+        json={
+            "challenge_token": second_challenge["challenge_token"],
+            "method": "email",
+        },
+    )
+    otp = AuthOtpChallenge.query.filter_by(
+        challenge_hash=auth.challenge_digest(second_challenge["challenge_token"])
+    ).one()
+    otp.expires_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+    db.session.commit()
+    expired = client.post(
+        "/api/auth/two-factor/code/verify",
+        json={
+            "challenge_token": second_challenge["challenge_token"],
+            "method": "email",
+            "code": sent[-1][3].split("Your verification code is ", 1)[1][:6],
+        },
+    )
+    assert expired.status_code == 401
+    assert "access_token" not in expired.get_json()
+
+
+def test_email_otp_resend_cooldown_and_hourly_limit(client, world, monkeypatch):
+    from server.routes import auth
+
+    client.application.config.update(
+        REQUIRE_TWO_FACTOR=True,
+        SMTP_HOST="smtp.example.com",
+        SMTP_FROM_ADDRESS="security@example.com",
+    )
+    user = db.session.get(User, world["ids"]["landlord"])
+    user.email_verified_at = datetime.now(timezone.utc)
+    db.session.commit()
+    challenge = start_factor_login(client, "lana@x.com")
+    sent = []
+    monkeypatch.setattr(
+        auth,
+        "queue_email",
+        lambda *args, **kwargs: sent.append(args),
+    )
+    request_body = {
+        "challenge_token": challenge["challenge_token"],
+        "method": "email",
+    }
+    assert client.post("/api/auth/two-factor/code/send", json=request_body).status_code == 200
+    cooldown = client.post("/api/auth/two-factor/code/send", json=request_body)
+    assert cooldown.status_code == 429
+    assert "wait" in cooldown.get_json()["error"].lower()
+
+    otp = AuthOtpChallenge.query.one()
+    otp.created_at = datetime.now(timezone.utc) - timedelta(seconds=31)
+    db.session.commit()
+    resent = client.post("/api/auth/two-factor/code/send", json=request_body)
+    assert resent.status_code == 200
+    assert len(sent) == 2
+    assert sent[0][3] != sent[1][3]
+
+    for _ in range(auth.OTP_MAX_PER_HOUR - 1):
+        challenge = start_factor_login(client, "lana@x.com")
+        AuthOtpChallenge.query.filter_by(
+            challenge_hash=auth.challenge_digest(challenge["challenge_token"])
+        ).delete()
+        db.session.commit()
+        client.post(
+            "/api/auth/two-factor/code/send",
+            json={
+                "challenge_token": challenge["challenge_token"],
+                "method": "email",
+            },
+        )
+    limited = client.post(
+        "/api/auth/two-factor/code/send",
+        json=request_body,
+    )
+    assert limited.status_code == 429
 
 
 def test_mfa_email_outbox_encrypts_code_until_delivery(client):

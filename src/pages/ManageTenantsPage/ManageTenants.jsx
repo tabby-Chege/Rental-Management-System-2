@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { Link, useSearchParams } from "react-router-dom";
 import {
   deleteTenant,
   listTenants,
@@ -11,6 +12,8 @@ const EMPTY_FORM = { name: "", email: "", phone_code: "+254", phone_number: "" }
 const PER_PAGE = 10;
 
 function ManageTenantsPage() {
+  const [searchParams] = useSearchParams();
+  const propertyId = searchParams.get("property_id") ?? "";
   const [tenants, setTenants] = useState([]);
   const [pagination, setPagination] = useState(null);
   const [page, setPage] = useState(1);
@@ -29,7 +32,7 @@ function ManageTenantsPage() {
       setLoading(true);
       setLoadError("");
       try {
-        const result = await listTenants(page, PER_PAGE);
+        const result = await listTenants(page, PER_PAGE, propertyId);
         if (!ignore) {
           setTenants(result.tenants);
           setPagination(result.pagination);
@@ -49,7 +52,7 @@ function ManageTenantsPage() {
     return () => {
       ignore = true;
     };
-  }, [page, reloadCount]);
+  }, [page, reloadCount, propertyId]);
 
   function resetForm() {
     setForm(EMPTY_FORM);
@@ -98,7 +101,7 @@ function ManageTenantsPage() {
 
   return (
     <section className="manage-properties">
-      <h1>My tenants</h1>
+      <h1>{propertyId ? "Tenants at this property" : "My tenants"}</h1>
       <p className="manage-intro">
         Tenants are added to your list through applications or leases. You can
         update contact details for existing records.
@@ -197,6 +200,14 @@ function ManageTenantsPage() {
                 <p>{tenant.email}{tenant.phone ? ` · ${tenant.phone}` : ""}</p>
               </div>
               <div className="manage-actions">
+                {tenant.user_id && (
+                  <Link
+                    className="manage-button is-secondary"
+                    to={`/messages?tenant_user_id=${tenant.user_id}`}
+                  >
+                    Message
+                  </Link>
+                )}
                 <button
                   className="manage-button manage-button--ghost"
                   type="button"

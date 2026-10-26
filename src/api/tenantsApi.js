@@ -27,11 +27,12 @@ async function request(path, options = {}) {
   return body;
 }
 
-export async function listTenants(page = 1, perPage = 10) {
+export async function listTenants(page = 1, perPage = 10, propertyId) {
   const params = new URLSearchParams({
     page: String(page),
     per_page: String(perPage),
   });
+  if (propertyId) params.set("property_id", String(propertyId));
   return request(`?${params.toString()}`);
 }
 
