@@ -18,6 +18,7 @@ from server.models_communications import PropertyConversation, PropertyMessage
 from server.models_media import ListingReport, PropertyPhoto
 from server.models_landlord_tools import LeaseDocument, MaintenancePhoto, MaintenanceRequest
 from server.models_auth_factors import (
+    AuthFactorChallenge,
     AuthOtpChallenge,
     AuthPasskeyChallenge,
     PasskeyCredential,
@@ -105,8 +106,7 @@ def create_app(test_config=None):
         if app.config.get("REQUIRE_TWO_FACTOR"):
             if jwt_payload.get("mfa_verified") is not True:
                 return True
-            user = db.session.get(User, jwt_payload.get("sub"))
-            return user is None or not user.totp_enabled
+            return db.session.get(User, jwt_payload.get("sub")) is None
         return False
 
     @jwt.needs_fresh_token_loader

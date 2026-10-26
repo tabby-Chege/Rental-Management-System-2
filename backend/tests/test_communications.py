@@ -66,11 +66,6 @@ def test_conversation_replies_are_private_to_the_tenant_and_property_owner(
 def test_conversation_input_and_roles_are_validated(client, world):
     assert client.post(
         "/api/conversations",
-        headers=world["landlord"],
-        json={"property_id": 1, "body": "Hello"},
-    ).status_code == 403
-    assert client.post(
-        "/api/conversations",
         headers=world["tenant"],
         json={"property_id": 1, "body": "  "},
     ).status_code == 400
@@ -105,6 +100,94 @@ def test_existing_property_conversation_is_reused(client, world):
         "Question one",
         "Question two",
     ]
+
+
+def test_landlord_can_start_contextual_conversation_and_unread_is_tracked(
+    client, world
+):
+    unit_id = create_unit(client, world["landlord"])
+    unit = client.get(
+        f"/api/units/{unit_id}", headers=world["landlord"]
+    ).get_json()["unit"]
+
+    created = client.post(
+        "/api/conversations",
+        headers=world["landlord"],
+        json={
+            "property_id": unit["property_id"],
+            "unit_id": unit_id,
+            "tenant_user_id": world["ids"]["tenant_user"],
+            "body": "Following up about your application.",
+        },
+    )
+    assert created.status_code == 201
+    conversation = created.get_json()["conversation"]
+    assert conversation["unit"]["unit_number"] == unit["unit_number"]
+    assert conversation["unread_count"] == 0
+
+    tenant_threads = client.get(
+        "/api/conversations", headers=world["tenant"]
+    ).get_json()["conversations"]
+    assert tenant_threads[0]["unread_count"] == 1
+    notices = client.get(
+        "/api/notifications", headers=world["tenant"]
+    ).get_json()["notifications"]
+    assert notices[0]["notification_type"] == "message"
+    assert notices[0]["conversation_id"] == conversation["id"]
+
+    read = client.get(
+        f"/api/conversations/{conversation['id']}/messages",
+        headers=world["tenant"],
+    )
+    assert read.status_code == 200
+    assert client.get(
+        "/api/conversations", headers=world["tenant"]
+    ).get_json()["conversations"][0]["unread_count"] == 0
+
+    reply = client.post(
+        f"/api/conversations/{conversation['id']}/messages",
+        headers=world["tenant"],
+        json={"body": "Thank you."},
+    )
+    assert reply.status_code == 201
+    landlord_notices = client.get(
+        "/api/notifications", headers=world["landlord"]
+    ).get_json()["notifications"]
+    assert landlord_notices[0]["notification_type"] == "message"
+    assert landlord_notices[0]["conversation_id"] == conversation["id"]
+    marked = client.patch(
+        f"/api/notifications/{landlord_notices[0]['id']}/read",
+        headers=world["landlord"],
+    )
+    assert marked.status_code == 200
+    assert client.get(
+        "/api/conversations", headers=world["landlord"]
+    ).get_json()["conversations"][0]["unread_count"] == 0
+
+
+def test_property_and_unit_conversations_have_separate_context(client, world):
+    unit_id = create_unit(client, world["landlord"])
+    unit = client.get(
+        f"/api/units/{unit_id}", headers=world["landlord"]
+    ).get_json()["unit"]
+    property_thread = client.post(
+        "/api/conversations",
+        headers=world["tenant"],
+        json={"property_id": unit["property_id"], "body": "General question"},
+    ).get_json()["conversation"]
+    unit_thread = client.post(
+        "/api/conversations",
+        headers=world["tenant"],
+        json={
+            "property_id": unit["property_id"],
+            "unit_id": unit_id,
+            "body": "Question about this unit",
+        },
+    ).get_json()["conversation"]
+
+    assert property_thread["id"] != unit_thread["id"]
+    assert property_thread["unit_id"] is None
+    assert unit_thread["unit_id"] == unit_id
 
 
 def test_property_with_message_history_cannot_be_deleted(client, world):

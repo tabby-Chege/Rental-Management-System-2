@@ -34,6 +34,35 @@
   box-shadow: 0 14px 28px rgba(15, 23, 42, 0.04);
 }
 
+.property-workspace-tabs {
+  display: flex;
+  gap: 7px;
+  overflow-x: auto;
+  margin: 0 0 24px;
+  padding: 6px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--surface);
+}
+
+.property-workspace-tabs a {
+  display: inline-flex;
+  min-height: 38px;
+  flex: 0 0 auto;
+  align-items: center;
+  padding: 8px 14px;
+  border-radius: 10px;
+  color: var(--muted);
+  font-size: 0.82rem;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.property-workspace-tabs a:hover {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
 .details-title {
   display: flex;
   align-items: center;

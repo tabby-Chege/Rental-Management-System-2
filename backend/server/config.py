@@ -11,6 +11,9 @@ class Config:
     def load(cls):
         jwt_secret = os.getenv("JWT_SECRET_KEY")
         s3_bucket = os.getenv("S3_BUCKET")
+        frontend_base_url = os.getenv(
+            "FRONTEND_BASE_URL", "http://localhost:5173"
+        ).rstrip("/")
         return {
             "SQLALCHEMY_DATABASE_URI": (
                 os.getenv("SQLALCHEMY_DATABASE_URI") or os.getenv("DATABASE_URL")
@@ -27,6 +30,11 @@ class Config:
             == "true",
             "TOTP_ENCRYPTION_KEY": os.getenv("TOTP_ENCRYPTION_KEY"),
             "GOOGLE_CLIENT_ID": os.getenv("GOOGLE_CLIENT_ID"),
+            "GITHUB_CLIENT_ID": os.getenv("GITHUB_CLIENT_ID"),
+            "GITHUB_CLIENT_SECRET": os.getenv("GITHUB_CLIENT_SECRET"),
+            "GITHUB_REDIRECT_URI": os.getenv(
+                "GITHUB_REDIRECT_URI", f"{frontend_base_url}/login"
+            ),
             "TWILIO_ACCOUNT_SID": os.getenv("TWILIO_ACCOUNT_SID"),
             "TWILIO_AUTH_TOKEN": os.getenv("TWILIO_AUTH_TOKEN"),
             "TWILIO_FROM_NUMBER": os.getenv("TWILIO_FROM_NUMBER"),
@@ -59,9 +67,7 @@ class Config:
             "BANK_TRANSFER_INSTRUCTIONS": os.getenv(
                 "BANK_TRANSFER_INSTRUCTIONS", ""
             ),
-            "FRONTEND_BASE_URL": os.getenv(
-                "FRONTEND_BASE_URL", "http://localhost:5173"
-            ).rstrip("/"),
+            "FRONTEND_BASE_URL": frontend_base_url,
             "STRIPE_SECRET_KEY": os.getenv("STRIPE_SECRET_KEY"),
             "STRIPE_WEBHOOK_SECRET": os.getenv("STRIPE_WEBHOOK_SECRET"),
             "PAYPAL_CLIENT_ID": os.getenv("PAYPAL_CLIENT_ID"),

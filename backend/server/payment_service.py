@@ -319,7 +319,7 @@ def prepare_rent_invoices(lease, payment_amount):
 
 
 def _apply_rent_payment(payment):
-    remaining = Decimal(payment.amount)
+    remaining = Decimal(str(payment.amount))
     invoices = (
         RentInvoice.query.filter(
             RentInvoice.lease_id == payment.lease_id,
@@ -365,7 +365,7 @@ def apply_payment_effects(payment):
                     lease_id=payment.lease_id,
                     payment_id=payment.id,
                     entry_type="payment",
-                    amount=payment.amount,
+                    amount=Decimal(str(payment.amount)),
                     currency=payment.currency,
                     note="Security deposit payment",
                 )
@@ -374,13 +374,16 @@ def apply_payment_effects(payment):
     lease = db.session.get(Lease, payment.lease_id)
     tenant = db.session.get(Tenant, lease.tenant_id) if lease else None
     user = db.session.get(User, tenant.user_id) if tenant else None
+    currency = payment.currency or "not recorded (legacy)"
+    payment_type = payment.payment_type or "not recorded (legacy)"
+    provider = payment.provider or "not recorded (legacy)"
     queue_email(
         f"payment:{payment.id}:receipt",
         user.email if user else None,
         f"Payment receipt for lease {payment.lease_id}",
         (
-            f"Payment received: {payment.currency} {payment.amount}. "
-            f"Type: {payment.payment_type}. Provider: {payment.provider}. "
+            f"Payment received: {currency} {payment.amount}. "
+            f"Type: {payment_type}. Provider: {provider}. "
             f"Reference: {payment.provider_reference or payment.reference_code or 'not provided'}."
         ),
     )

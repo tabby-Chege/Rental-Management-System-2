@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { getCurrentUser } from "../../api/authAPI";
 import { listLeases, listMyLeases } from "../../api/leasesAPI";
 import {
@@ -6,26 +7,39 @@ import {
   listLeaseDocuments,
   uploadLeaseDocument,
 } from "../../api/landlordToolsApi";
+import { listUnits } from "../../api/unitsAPI";
 import "../manage.css";
 
 function LeaseDocumentsPage() {
+  const [searchParams] = useSearchParams();
+  const propertyId = searchParams.get("property_id") ?? "";
   const [leases, setLeases] = useState([]);
-  const [selectedLeaseId, setSelectedLeaseId] = useState("");
-  const [documents, setDocuments] = useState([]);
+  const [selectedLeaseIdState, setSelectedLeaseId] = useState("");
+  const [documentsByLease, setDocumentsByLease] = useState({});
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const selectedLeaseId = leases.some(
+    (lease) => String(lease.id) === selectedLeaseIdState,
+  )
+    ? selectedLeaseIdState
+    : String(leases[0]?.id ?? "");
+  const documents = documentsByLease[selectedLeaseId] ?? [];
 
   useEffect(() => {
     let ignore = false;
     async function loadLeases() {
       try {
         const { user } = await getCurrentUser();
-        const result = user.role === "tenant" ? await listMyLeases() : await listLeases();
+        let result = user.role === "tenant" ? await listMyLeases() : await listLeases();
+        if (propertyId && user.role !== "tenant") {
+          const units = await listUnits(propertyId);
+          const propertyUnitIds = new Set(units.map((unit) => unit.id));
+          result = result.filter((lease) => propertyUnitIds.has(lease.unit_id));
+        }
         if (!ignore) {
           setLeases(result);
-          setSelectedLeaseId((current) => current || String(result[0]?.id ?? ""));
         }
       } catch (requestError) {
         if (!ignore) setError(requestError.message);
@@ -37,18 +51,18 @@ function LeaseDocumentsPage() {
     return () => {
       ignore = true;
     };
-  }, []);
+  }, [propertyId]);
 
   useEffect(() => {
-    if (!selectedLeaseId) {
-      setDocuments([]);
-      return undefined;
-    }
+    if (!selectedLeaseId) return undefined;
     let ignore = false;
     listLeaseDocuments(selectedLeaseId)
       .then((result) => {
         if (!ignore) {
-          setDocuments(result);
+          setDocumentsByLease((current) => ({
+            ...current,
+            [selectedLeaseId]: result,
+          }));
           setError("");
         }
       })
@@ -69,7 +83,13 @@ function LeaseDocumentsPage() {
     setNotice("");
     try {
       const result = await uploadLeaseDocument(selectedLeaseId, file);
-      setDocuments((current) => [result.document, ...current]);
+      setDocumentsByLease((current) => ({
+        ...current,
+        [selectedLeaseId]: [
+          result.document,
+          ...(current[selectedLeaseId] ?? []),
+        ],
+      }));
       setNotice("Lease document uploaded securely.");
     } catch (requestError) {
       setError(requestError.message);
@@ -92,7 +112,7 @@ function LeaseDocumentsPage() {
 
   return (
     <section className="manage-page">
-      <h1>Lease documents</h1>
+      <h1>{propertyId ? "Property documents" : "Lease documents"}</h1>
       <p className="manage-status">
         Share and securely download documents attached to your lease.
       </p>

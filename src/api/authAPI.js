@@ -148,6 +148,24 @@ export async function loginWithGoogle(credential, role) {
   return data;
 }
 
+export function getGitHubOAuthConfig() {
+  return authRequest("/github-login/config", {}, false, "GET");
+}
+
+export function beginGitHubLogin() {
+  return authRequest("/github-login/start", {});
+}
+
+export async function loginWithGitHub(code, state, role) {
+  const data = await authRequest("/github-login", { code, state, role });
+  if (data.access_token && data.refresh_token) {
+    saveTokens(data.access_token, data.refresh_token);
+  } else if (!data.mfa_required && !data.mfa_setup_required) {
+    throw new Error("GitHub sign-in response did not include authentication details.");
+  }
+  return data;
+}
+
 export async function beginTwoFactorSetup(challengeToken) {
   return authRequest("/two-factor/setup", { challenge_token: challengeToken });
 }

@@ -4,10 +4,10 @@ export function listConversations() {
   return request("/api/conversations").then((data) => data.conversations);
 }
 
-export function startConversation(propertyId, body) {
+export function startConversation(propertyId, body, context = {}) {
   return request("/api/conversations", {
     method: "POST",
-    body: JSON.stringify({ property_id: propertyId, body }),
+    body: JSON.stringify({ property_id: propertyId, body, ...context }),
   });
 }
 

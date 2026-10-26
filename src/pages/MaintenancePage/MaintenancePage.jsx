@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { getCurrentUser } from "../../api/authAPI";
 import { listMyLeases } from "../../api/leasesAPI";
 import {
@@ -18,6 +19,8 @@ const STATUS_LABELS = {
 };
 
 function MaintenancePage() {
+  const [searchParams] = useSearchParams();
+  const propertyId = searchParams.get("property_id") ?? "";
   const [user, setUser] = useState(null);
   const [leases, setLeases] = useState([]);
   const [requests, setRequests] = useState([]);
@@ -35,7 +38,7 @@ function MaintenancePage() {
       try {
         const [{ user: currentUser }, requestList] = await Promise.all([
           getCurrentUser(),
-          listMaintenanceRequests(),
+          listMaintenanceRequests(propertyId ? { propertyId } : {}),
         ]);
         const leaseList = currentUser.role === "tenant"
           ? await listMyLeases()
@@ -59,7 +62,7 @@ function MaintenancePage() {
     return () => {
       ignore = true;
     };
-  }, []);
+  }, [propertyId]);
 
   async function handleSubmit(event) {
     event.preventDefault();
@@ -127,7 +130,7 @@ function MaintenancePage() {
   return (
     <section className="manage-page">
       <header>
-        <h1>Maintenance</h1>
+        <h1>{propertyId ? "Property maintenance" : "Maintenance"}</h1>
         <p className="manage-status">
           Submit repairs and follow progress with the property manager.
         </p>

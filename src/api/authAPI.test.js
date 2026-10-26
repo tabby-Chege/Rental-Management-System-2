@@ -3,12 +3,15 @@ import test from "node:test";
 
 import {
   beginTwoFactorSetup,
+  beginGitHubLogin,
   completeTwoFactor,
+  getGitHubOAuthConfig,
   getFactorMethods,
   getCurrentUser,
   getRefreshToken,
   getToken,
   loginUser,
+  loginWithGitHub,
   loginWithGoogle,
   sendLoginFactorCode,
   verifyLoginFactorCode,
@@ -149,6 +152,49 @@ test("Google login sends role only when selected for a new account", async () =>
     { credential: "google-id-token", role: "tenant" },
   ]);
   assert.equal(getToken(), null);
+  delete globalThis.localStorage;
+  delete globalThis.fetch;
+});
+
+test("GitHub OAuth does not save a session before the MFA challenge is completed", async () => {
+  mockBrowser();
+  const calls = [];
+  const replies = [
+    { configured: true },
+    { authorization_url: "https://github.com/login/oauth/authorize?state=oauth-state" },
+    { mfa_required: true, challenge_token: "github-mfa" },
+  ];
+  globalThis.fetch = async (url, options) => {
+    calls.push({ url, method: options.method, body: options.body });
+    return mockResponse(replies.shift());
+  };
+
+  assert.deepEqual(await getGitHubOAuthConfig(), { configured: true });
+  assert.equal(
+    (await beginGitHubLogin()).authorization_url,
+    "https://github.com/login/oauth/authorize?state=oauth-state",
+  );
+  assert.deepEqual(await loginWithGitHub("oauth-code", "oauth-state", "tenant"), {
+    mfa_required: true,
+    challenge_token: "github-mfa",
+  });
+  assert.equal(getToken(), null);
+  assert.deepEqual(
+    calls.map(({ url, method, body }) => ({
+      url,
+      method,
+      body: body ? JSON.parse(body) : null,
+    })),
+    [
+      { url: "/api/auth/github-login/config", method: "GET", body: null },
+      { url: "/api/auth/github-login/start", method: "POST", body: {} },
+      {
+        url: "/api/auth/github-login",
+        method: "POST",
+        body: { code: "oauth-code", state: "oauth-state", role: "tenant" },
+      },
+    ],
+  );
   delete globalThis.localStorage;
   delete globalThis.fetch;
 });

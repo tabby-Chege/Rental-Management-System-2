@@ -160,6 +160,7 @@ function LeaseForm({ initial, units, properties, tenants, isEdit, submitLabel, o
 
 function LeasesPage() {
   const [searchParams] = useSearchParams();
+  const propertyId = searchParams.get("property_id") ?? "";
   const [leases, setLeases] = useState([]);
   const [units, setUnits] = useState([]);
   const [properties, setProperties] = useState([]);
@@ -181,17 +182,25 @@ function LeasesPage() {
     let ignore = false;
     async function load() {
       try {
-        const [leaseList, unitList, tenantList, propertyList] = await Promise.all([
+        const [leaseList, allUnits, tenantResult, propertyList] = await Promise.all([
           listLeases(),
           listUnits(),
-          listTenants().then((result) => result.tenants),
+          listTenants(1, 100, propertyId).then((result) => result.tenants),
           listProperties().catch(() => []), // only used for labels
         ]);
+        const unitList = propertyId
+          ? allUnits.filter((unit) => String(unit.property_id) === propertyId)
+          : allUnits;
+        const propertyUnitIds = new Set(unitList.map((unit) => unit.id));
         if (!ignore) {
-          setLeases(leaseList);
+          setLeases(propertyId
+            ? leaseList.filter((lease) => propertyUnitIds.has(lease.unit_id))
+            : leaseList);
           setUnits(unitList);
-          setTenants(tenantList);
-          setProperties(propertyList);
+          setTenants(tenantResult);
+          setProperties(propertyId
+            ? propertyList.filter((property) => String(property.id) === propertyId)
+            : propertyList);
         }
       } catch (err) {
         if (!ignore) setError(err.message);
@@ -203,7 +212,7 @@ function LeasesPage() {
     return () => {
       ignore = true;
     };
-  }, []);
+  }, [propertyId]);
 
   const unitLabel = (id) => {
     const unit = units.find((u) => u.id === id);
@@ -251,7 +260,7 @@ function LeasesPage() {
     <section className="manage-page">
       <header className="manage-page-heading">
         <div>
-          <h1>Leases</h1>
+          <h1>{propertyId ? "Property leases" : "Leases"}</h1>
           <p className="manage-status">Review current rental agreements and keep lease terms up to date.</p>
         </div>
         {!isLoading && canAdd && (

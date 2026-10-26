@@ -15,6 +15,149 @@
   background: var(--surface);
 }
 
+.app-workspace {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+.app-sidebar {
+  position: sticky;
+  top: 0;
+  width: 248px;
+  height: calc(100vh - 76px);
+  flex: 0 0 248px;
+  overflow-y: auto;
+  padding: 26px 14px;
+  border-right: 1px solid var(--line);
+  background: #fbfdfc;
+}
+
+.app-sidebar-label {
+  margin: 0 12px 12px;
+  color: var(--muted);
+  font-size: 0.67rem;
+  font-weight: 800;
+  letter-spacing: 0.13em;
+}
+
+.app-sidebar nav {
+  display: grid;
+  gap: 4px;
+}
+
+.app-sidebar .app-navigation-link {
+  display: flex;
+  min-height: 42px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 9px 12px;
+  border: 0;
+  border-radius: 10px;
+  color: #586a65;
+  font-size: 0.87rem;
+  font-weight: 650;
+  text-decoration: none;
+}
+
+.app-sidebar .app-navigation-link:hover,
+.app-sidebar .app-navigation-link.is-active {
+  background: #e9f5f1;
+  color: #0c6a61;
+}
+
+.app-unread-badge {
+  display: inline-grid;
+  min-width: 22px;
+  height: 22px;
+  place-items: center;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: #bd4338;
+  color: #fff;
+  font-size: 0.68rem;
+  font-weight: 800;
+}
+
+.app-header-actions {
+  display: flex;
+  align-items: center;
+  gap: clamp(12px, 2vw, 24px);
+}
+
+.app-search-link,
+.app-logout-button {
+  color: var(--muted);
+  font: inherit;
+  font-size: 0.86rem;
+  font-weight: 650;
+  text-decoration: none;
+}
+
+.app-search-link:hover,
+.app-logout-button:hover {
+  color: var(--accent);
+}
+
+.app-account-name {
+  max-width: 220px;
+  overflow: hidden;
+  color: var(--ink);
+  font-size: 0.83rem;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.app-account-menu {
+  position: relative;
+  color: var(--ink);
+  font-size: 0.83rem;
+}
+
+.app-account-menu summary {
+  max-width: 220px;
+  overflow: hidden;
+  padding: 9px 12px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  cursor: pointer;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.app-account-menu > div {
+  position: absolute;
+  z-index: 20;
+  top: calc(100% + 8px);
+  right: 0;
+  display: grid;
+  min-width: 180px;
+  gap: 10px;
+  padding: 13px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+  box-shadow: 0 12px 30px rgba(15, 23, 42, 0.12);
+}
+
+.app-account-menu > div > span {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 0.75rem;
+  text-overflow: ellipsis;
+}
+
+.app-logout-button {
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--surface);
+  cursor: pointer;
+}
+
 .app-brand {
   display: inline-flex;
   align-items: center;
@@ -79,7 +222,12 @@
 
 .app-main {
   flex: 1;
+  min-width: 0;
   width: 100%;
+}
+
+.has-sidebar .app-main {
+  overflow: hidden;
 }
 
 .app-footer {
@@ -115,6 +263,268 @@
   font-weight: 500;
 }
 
+.workspace-dashboard {
+  display: grid;
+  max-width: 1500px;
+  gap: 22px;
+  margin: 0 auto;
+  padding: clamp(22px, 4vw, 46px);
+  color: var(--ink);
+}
+
+.workspace-dashboard-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+}
+
+.workspace-eyebrow {
+  margin: 0 0 7px;
+  color: var(--accent);
+  font-size: 0.67rem;
+  font-weight: 800;
+  letter-spacing: 0.14em;
+}
+
+.workspace-dashboard-heading h1 {
+  margin: 0;
+  font-size: clamp(1.8rem, 3vw, 2.45rem);
+  letter-spacing: -0.06em;
+}
+
+.workspace-dashboard-heading > div > p:last-child {
+  margin: 8px 0 0;
+  color: var(--muted);
+}
+
+.workspace-stat-grid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.workspace-stat-card,
+.workspace-panel,
+.workspace-home-card {
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: var(--surface);
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.035);
+}
+
+.workspace-stat-card {
+  display: grid;
+  min-width: 0;
+  gap: 10px;
+  padding: 19px;
+  color: inherit;
+  text-decoration: none;
+  transition: transform 150ms ease, border-color 150ms ease;
+}
+
+.workspace-stat-card:hover {
+  transform: translateY(-2px);
+  border-color: rgba(15, 118, 110, 0.4);
+}
+
+.workspace-stat-card > span {
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 650;
+}
+
+.workspace-stat-card strong {
+  overflow: hidden;
+  font-size: clamp(1.4rem, 2.2vw, 1.9rem);
+  letter-spacing: -0.06em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workspace-stat-card small {
+  color: var(--muted);
+  font-size: 0.72rem;
+}
+
+.workspace-dashboard-lower {
+  display: grid;
+  grid-template-columns: minmax(0, 1.5fr) minmax(260px, 0.8fr);
+  align-items: start;
+  gap: 18px;
+}
+
+.workspace-panel {
+  display: grid;
+  gap: 16px;
+  min-width: 0;
+  padding: 21px;
+}
+
+.workspace-panel-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.workspace-panel-heading h2,
+.workspace-home-card h2,
+.workspace-shortcuts h2 {
+  margin: 0;
+  font-size: 1.05rem;
+  letter-spacing: -0.03em;
+}
+
+.workspace-panel-heading > a,
+.workspace-attention-list > li > a,
+.workspace-shortcuts > a,
+.workspace-home-actions > a:not(.manage-button) {
+  color: var(--accent);
+  font-size: 0.78rem;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.workspace-attention-list {
+  display: grid;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.workspace-attention-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 13px 0;
+  border-top: 1px solid #edf1ef;
+}
+
+.workspace-attention-list li > div {
+  display: grid;
+  min-width: 0;
+  gap: 5px;
+}
+
+.workspace-attention-list strong {
+  overflow: hidden;
+  font-size: 0.83rem;
+  text-overflow: ellipsis;
+}
+
+.workspace-attention-list small,
+.workspace-empty,
+.workspace-lease-note {
+  color: var(--muted);
+  font-size: 0.77rem;
+  line-height: 1.5;
+}
+
+.workspace-empty {
+  margin: 0;
+}
+
+.tenant-application-timeline {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 16px 0;
+  padding: 0;
+  list-style: none;
+}
+
+.tenant-application-timeline li {
+  padding: 6px 10px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 650;
+}
+
+.tenant-application-timeline li.is-complete {
+  border-color: #b9e3c8;
+  background: #effaf3;
+  color: #17623a;
+}
+
+.tenant-application-timeline li.is-current {
+  border-color: rgba(15, 118, 110, 0.3);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.workspace-shortcuts {
+  gap: 12px;
+}
+
+.workspace-shortcuts h2 {
+  margin-bottom: 2px;
+}
+
+.workspace-shortcuts > a {
+  display: flex;
+  justify-content: space-between;
+  padding: 12px 0;
+  border-top: 1px solid #edf1ef;
+}
+
+.workspace-home-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  padding: clamp(22px, 4vw, 34px);
+  background:
+    radial-gradient(circle at 90% 5%, rgba(15, 118, 110, 0.1), transparent 32%),
+    var(--surface);
+}
+
+.workspace-home-card > div:first-child > p:not(.workspace-eyebrow) {
+  color: var(--muted);
+}
+
+.workspace-home-card dl {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 28px;
+  margin: 18px 0 0;
+}
+
+.workspace-home-card dl > div {
+  display: grid;
+  gap: 4px;
+}
+
+.workspace-home-card dt {
+  color: var(--muted);
+  font-size: 0.72rem;
+}
+
+.workspace-home-card dd {
+  margin: 0;
+  font-size: 0.84rem;
+  font-weight: 700;
+}
+
+.workspace-home-actions {
+  display: grid;
+  flex: 0 0 auto;
+  justify-items: end;
+  gap: 12px;
+}
+
+.tenant-home .workspace-dashboard-lower {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.tenant-home .workspace-dashboard-lower > .workspace-panel:last-child {
+  grid-column: 1 / -1;
+}
+
 @media (max-width: 560px) {
   .app-header {
     min-height: 66px;
@@ -125,8 +535,20 @@
     font-size: 14px;
   }
 
-  .app-navigation-link {
-    font-size: 13px;
+  .app-header {
+    gap: 10px;
+  }
+
+  .app-header-actions {
+    gap: 9px;
+  }
+
+  .app-account-name {
+    display: none;
+  }
+
+  .app-search-link {
+    font-size: 0.76rem;
   }
 
   .app-footer {
@@ -150,6 +572,72 @@
   &:focus-visible {
     outline: 2px solid var(--accent);
     outline-offset: 2px;
+  }
+
+  .app-workspace {
+    display: block;
+  }
+
+  .app-sidebar {
+    position: sticky;
+    z-index: 5;
+    top: 0;
+    width: 100%;
+    height: auto;
+    padding: 8px 10px;
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .app-sidebar-label {
+    display: none;
+  }
+
+  .app-sidebar nav {
+    display: flex;
+    gap: 5px;
+    overflow-x: auto;
+  }
+
+  .app-sidebar .app-navigation-link {
+    min-height: 36px;
+    flex: 0 0 auto;
+    padding: 7px 10px;
+    font-size: 0.77rem;
+    white-space: nowrap;
+  }
+
+  .workspace-dashboard-heading,
+  .workspace-home-card {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .workspace-stat-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .workspace-dashboard-lower,
+  .tenant-home .workspace-dashboard-lower {
+    grid-template-columns: 1fr;
+  }
+
+  .tenant-home .workspace-dashboard-lower > .workspace-panel:last-child {
+    grid-column: auto;
+  }
+
+  .workspace-home-actions {
+    justify-items: start;
+  }
+}
+
+@media (min-width: 561px) and (max-width: 1080px) {
+  .workspace-stat-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .workspace-dashboard-lower {
+    grid-template-columns: 1fr;
   }
 }
 
@@ -1019,5 +1507,73 @@
     transition-duration: 0.01ms !important;
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
+  }
+
+  @media (max-width: 760px) {
+    .app-workspace {
+      display: block;
+    }
+
+    .app-sidebar {
+      position: sticky;
+      z-index: 5;
+      top: 0;
+      width: 100%;
+      height: auto;
+      padding: 8px 10px;
+      border-right: 0;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .app-sidebar-label {
+      display: none;
+    }
+
+    .app-sidebar nav {
+      display: flex;
+      gap: 5px;
+      overflow-x: auto;
+    }
+
+    .app-sidebar .app-navigation-link {
+      min-height: 36px;
+      flex: 0 0 auto;
+      padding: 7px 10px;
+      font-size: 0.77rem;
+      white-space: nowrap;
+    }
+
+    .app-header-actions {
+      align-self: stretch;
+      justify-content: flex-end;
+      gap: 10px;
+    }
+
+    .app-account-menu summary {
+      max-width: 150px;
+    }
+
+    .workspace-dashboard-heading,
+    .workspace-home-card {
+      align-items: flex-start;
+      flex-direction: column;
+    }
+
+    .workspace-stat-grid {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .workspace-dashboard-lower,
+    .tenant-home .workspace-dashboard-lower {
+      grid-template-columns: 1fr;
+    }
+
+    .tenant-home .workspace-dashboard-lower > .workspace-panel:last-child {
+      grid-column: auto;
+    }
+
+    .workspace-home-actions {
+      justify-items: start;
+    }
   }
 }

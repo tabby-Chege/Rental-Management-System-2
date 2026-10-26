@@ -38,6 +38,7 @@ function PropertyDetailsPage() {
   const [applicationError, setApplicationError] = useState("");
   const [applicationMessage, setApplicationMessage] = useState("");
   const [inquiryBody, setInquiryBody] = useState("");
+  const [inquiryUnitId, setInquiryUnitId] = useState("");
   const [inquiryError, setInquiryError] = useState("");
   const [sendingInquiry, setSendingInquiry] = useState(false);
   const [moveInDate, setMoveInDate] = useState("");
@@ -176,7 +177,11 @@ function PropertyDetailsPage() {
     setInquiryError("");
     setSendingInquiry(true);
     try {
-      const result = await startConversation(property.id, inquiryBody);
+      const result = await startConversation(
+        property.id,
+        inquiryBody,
+        inquiryUnitId ? { unit_id: Number(inquiryUnitId) } : {},
+      );
       navigate(`/messages?conversation=${result.conversation.id}`);
     } catch (requestError) {
       setInquiryError(requestError.message || "Could not send your question.");
@@ -343,6 +348,15 @@ function PropertyDetailsPage() {
           {property.country ? `, ${property.country}` : ""}
         </p>
       </header>
+      {canManagePhotos && (
+        <nav className="property-workspace-tabs" aria-label={`${property.name} management`}>
+          <Link to={`/units?property_id=${property.id}`}>Units</Link>
+          <Link to={`/manage/tenants?property_id=${property.id}`}>Tenants</Link>
+          <Link to={`/leases?property_id=${property.id}`}>Leases</Link>
+          <Link to={`/maintenance?property_id=${property.id}`}>Maintenance</Link>
+          <Link to={`/lease-documents?property_id=${property.id}`}>Documents</Link>
+        </nav>
+      )}
       {property.occupancy_summary && (
         <section className="details-occupancy-summary" aria-label="Property occupancy summary">
           <strong>
@@ -354,11 +368,28 @@ function PropertyDetailsPage() {
         </section>
       )}
       {user?.role === "tenant" && property.owner_id !== user.id && (
-        <details className="details-box listing-report property-inquiry">
-          <summary>Ask the landlord a question</summary>
+        <section className="details-box listing-report property-inquiry">
+          <h2>Message the landlord</h2>
+          <p>Ask a private question about this property before or after applying.</p>
           <form onSubmit={sendPropertyInquiry}>
+            {units.length > 0 && (
+              <label>
+                Unit (optional)
+                <select
+                  value={inquiryUnitId}
+                  onChange={(event) => setInquiryUnitId(event.target.value)}
+                >
+                  <option value="">General property question</option>
+                  {units.map((unit) => (
+                    <option key={unit.id} value={unit.id}>
+                      Unit {unit.unit_number}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
             <label>
-              Your question
+              Your message
               <textarea
                 value={inquiryBody}
                 maxLength={5000}
@@ -368,10 +399,10 @@ function PropertyDetailsPage() {
             </label>
             {inquiryError && <p className="details-error" role="alert">{inquiryError}</p>}
             <button type="submit" disabled={sendingInquiry || !inquiryBody.trim()}>
-              {sendingInquiry ? "Sending…" : "Send question"}
+              {sendingInquiry ? "Sending…" : "Message landlord"}
             </button>
           </form>
-        </details>
+        </section>
       )}
       {!user && (
         <p className="details-inquiry-login">

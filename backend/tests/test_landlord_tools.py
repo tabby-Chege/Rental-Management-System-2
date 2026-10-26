@@ -40,6 +40,48 @@ def test_tenant_can_create_maintenance_request_and_landlord_updates_status(
     ).get_json()["requests"] == []
 
 
+def test_property_workspace_filters_leases_tenants_and_maintenance(
+    client, world
+):
+    lease_id = make_lease(client, world)
+    lease = db.session.get(Lease, lease_id)
+    unit = db.session.get(Unit, lease.unit_id)
+    property_id = unit.property_id
+    created = client.post(
+        "/api/maintenance",
+        headers=world["tenant"],
+        json={
+            "lease_id": lease_id,
+            "title": "Property workspace repair",
+            "description": "Track this request from the property workspace.",
+        },
+    )
+    assert created.status_code == 201
+
+    tenants = client.get(
+        f"/api/tenants?property_id={property_id}", headers=world["landlord"]
+    )
+    assert tenants.status_code == 200
+    assert len(tenants.get_json()["tenants"]) == 1
+
+    maintenance = client.get(
+        f"/api/maintenance?property_id={property_id}",
+        headers=world["landlord"],
+    )
+    assert maintenance.status_code == 200
+    assert [item["id"] for item in maintenance.get_json()["requests"]] == [
+        created.get_json()["request"]["id"]
+    ]
+    assert client.get(
+        f"/api/maintenance?property_id={property_id}",
+        headers=world["other"],
+    ).status_code == 404
+    assert client.get(
+        f"/api/tenants?property_id={property_id}",
+        headers=world["other"],
+    ).status_code == 404
+
+
 def test_maintenance_requests_are_private_and_need_active_tenant_lease(client, world):
     lease_id = make_lease(client, world)
     lease = db.session.get(Lease, lease_id)
