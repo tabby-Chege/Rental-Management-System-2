@@ -1,6 +1,7 @@
 const TOKEN_KEY = "access_token";
 const REFRESH_TOKEN_KEY = "refresh_token";
-const API_URL = "/api/auth";
+const BASE_URL = import.meta.env?.VITE_API_URL || "";
+const API_URL = `${BASE_URL}/api/auth`;
 let refreshPromise = null;
 
 export function getToken() {
@@ -56,10 +57,12 @@ async function refreshSession() {
 }
 
 export async function authenticatedFetch(url, options = {}) {
+  // Relative paths like "/api/units" go to the live backend when VITE_API_URL is set.
+  const fullUrl = url.startsWith("/") ? `${BASE_URL}${url}` : url;
   const send = (token) => {
     const headers = { ...options.headers };
     if (token) headers.Authorization = `Bearer ${token}`;
-    return fetch(url, { ...options, headers });
+    return fetch(fullUrl, { ...options, headers });
   };
 
   const response = await send(getToken());
