@@ -166,6 +166,11 @@ def test_public_property_search_includes_other_owners_and_city_filters(client, w
         "Nairobi home",
         "Mombasa home",
     }
+    detail = client.get(
+        f"/api/properties/public/{owned.get_json()['property']['id']}"
+    ).get_json()["property"]
+    assert detail["manager"] == {"name": "Lana"}
+    assert "email" not in detail["manager"]
 
 
 def test_public_property_units_and_filters(client, world):
@@ -203,6 +208,7 @@ def test_unit_bedrooms_create_update_and_persist(client, world):
             "property_id": property_id,
             "unit_number": "S0",
             "bedrooms": 0,
+            "rent_amount": 1200,
         },
     )
     assert created.status_code == 201
@@ -244,6 +250,36 @@ def test_unit_bedrooms_create_update_and_persist(client, world):
             json={"bedrooms": invalid_bedrooms},
         )
         assert response.status_code == 400
+
+
+def test_new_units_require_positive_monthly_rent(client, world):
+    property_id = create_property(
+        client, world["landlord"], "Rent validation listing"
+    ).get_json()["property"]["id"]
+    endpoint = f"/api/properties/{property_id}/units"
+
+    accepted = client.post(
+        endpoint,
+        headers=world["landlord"],
+        json={"unit_number": "A1", "rent_amount": 18500.5},
+    )
+    assert accepted.status_code == 201
+    assert accepted.get_json()["rent_amount"] == 18500.5
+
+    invalid_rents = (
+        ("A2", {}),
+        ("A3", {"rent_amount": None}),
+        ("A4", {"rent_amount": 0}),
+        ("A5", {"rent_amount": -1}),
+    )
+    for unit_number, rent_data in invalid_rents:
+        response = client.post(
+            endpoint,
+            headers=world["landlord"],
+            json={"unit_number": unit_number, **rent_data},
+        )
+        assert response.status_code == 400
+        assert "rent_amount" in response.get_json()["error"]
 
 
 def test_unit_type_description_and_rent_persist_with_owner_authorization(client, world):
@@ -373,7 +409,7 @@ def test_public_unit_search_includes_cover_photo_url(client, world):
     created_unit = client.post(
         f"/api/properties/{property_id}/units",
         headers=world["landlord"],
-        json={"unit_number": "A1", "bedrooms": 1},
+        json={"unit_number": "A1", "bedrooms": 1, "rent_amount": 1200},
     )
     assert created_unit.status_code == 201
     unit_id = created_unit.get_json()["id"]
@@ -413,7 +449,11 @@ def test_public_property_cards_include_available_bedroom_layouts(client, world):
         created = client.post(
             f"/api/properties/{property_id}/units",
             headers=world["landlord"],
-            json={"unit_number": unit_number, "bedrooms": bedrooms},
+            json={
+                "unit_number": unit_number,
+                "bedrooms": bedrooms,
+                "rent_amount": 1200,
+            },
         )
         assert created.status_code == 201
 
@@ -502,7 +542,7 @@ def test_units_collection_routes_support_the_units_page(client, world):
     created = client.post(
         "/api/units",
         headers=world["landlord"],
-        json={"property_id": property_id, "unit_number": "B2"},
+        json={"property_id": property_id, "unit_number": "B2", "rent_amount": 1200},
     )
     assert created.status_code == 201
     unit_id = created.get_json()["id"]
@@ -760,13 +800,18 @@ def test_multi_unit_floor_layout_and_room_validation(client, world):
     too_high = client.post(
         f"/api/properties/{property_id}/units",
         headers=world["landlord"],
-        json={"unit_number": "501", "floor_number": 5},
+        json={"unit_number": "501", "floor_number": 5, "rent_amount": 18000},
     )
     assert too_high.status_code == 400
     mismatch = client.post(
         f"/api/properties/{property_id}/units",
         headers=world["landlord"],
-        json={"unit_number": "202", "layout": "2+1", "bedrooms": 1},
+        json={
+            "unit_number": "202",
+            "layout": "2+1",
+            "bedrooms": 1,
+            "rent_amount": 18000,
+        },
     )
     assert mismatch.status_code == 400
 
@@ -816,7 +861,7 @@ def test_property_floor_and_rental_type_cannot_break_existing_units(client, worl
     unit = client.post(
         f"/api/properties/{property_id}/units",
         headers=world["landlord"],
-        json={"unit_number": "2", "floor_number": 1},
+        json={"unit_number": "2", "floor_number": 1, "rent_amount": 15000},
     )
     assert unit.status_code == 201
     assert client.put(

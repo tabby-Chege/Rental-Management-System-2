@@ -73,15 +73,17 @@ def validate_unit_data(data, *, currency, floors, partial=False, defaults=None):
     for field in ("bathrooms", "rent_amount", "size"):
         if field not in data:
             if not partial:
+                if field == "rent_amount":
+                    return None, "rent_amount is required"
                 cleaned.setdefault(field, None)
             continue
         value = data[field]
         if value is None:
+            if field == "rent_amount":
+                return None, "rent_amount must be a positive number"
             if field == "bathrooms" or field == "size":
                 cleaned[field] = None
                 continue
-            cleaned[field] = None
-            continue
         if isinstance(value, bool) or not isinstance(value, (int, float)):
             return None, f"{field} must be a number or null"
         if not math.isfinite(value) or value < 0:

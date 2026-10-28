@@ -12,7 +12,7 @@ import {
   updateUnit,
 } from "../../api/unitsAPI";
 import { formatBedroomCount, formatUnitType, validateUnitForm } from "../../utils/unitForm";
-import { CURRENCY_CODES, currencyPrecision, formatMoney } from "../../utils/money";
+import { CURRENCY_CODES, formatMoney, moneyInputBounds } from "../../utils/money";
 import "../manage.css";
 
 const EMPTY_FORM = {
@@ -144,6 +144,7 @@ function UnitForm({
   const selectedProperty = properties.find(
     (property) => String(property.id) === String(form.property_id)
   );
+  const rentInputBounds = moneyInputBounds(currency);
 
   function handleChange(event) {
     const { name, value } = event.target;
@@ -247,8 +248,9 @@ function UnitForm({
               <input
                 name={name}
                 type={config.type}
-                min={config.min}
-                step={name === "rent_amount" ? 10 ** -currencyPrecision(currency) : config.step}
+                min={name === "rent_amount" ? rentInputBounds.min : config.min}
+                max={name === "rent_amount" ? rentInputBounds.max : undefined}
+                step={name === "rent_amount" ? rentInputBounds.step : config.step}
                 value={form[name]}
                 onChange={handleChange}
                 aria-invalid={Boolean(errors[name])}

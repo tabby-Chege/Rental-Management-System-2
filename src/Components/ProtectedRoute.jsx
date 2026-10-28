@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
-import { Navigate, Outlet } from "react-router-dom";
+import { Navigate, Outlet, useLocation } from "react-router-dom";
 import { clearToken, getCurrentUser, getToken } from "../api/authAPI";
 
 function ProtectedRoute({ allowedRoles }) {
+  const location = useLocation();
   const token = getToken();
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(Boolean(token));
@@ -35,14 +36,30 @@ function ProtectedRoute({ allowedRoles }) {
   }, [token]);
 
   if (!token) {
-    return <Navigate to="/login" replace />;
+    return (
+      <Navigate
+        to="/login"
+        replace
+        state={{
+          returnTo: `${location.pathname}${location.search}${location.hash}`,
+        }}
+      />
+    );
   }
 
   if (loading) {
     return <p className="manage-status" role="status">Checking your account…</p>;
   }
   if (!user) {
-    return <Navigate to="/login" replace />;
+    return (
+      <Navigate
+        to="/login"
+        replace
+        state={{
+          returnTo: `${location.pathname}${location.search}${location.hash}`,
+        }}
+      />
+    );
   }
   if (allowedRoles && !allowedRoles.includes(user.role)) {
     return (

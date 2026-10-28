@@ -22,6 +22,10 @@ def client():
         "SQLALCHEMY_DATABASE_URI": "sqlite:///:memory:",
         "JWT_SECRET_KEY": "test-secret-key-for-tests-only-0123456789",
         "REQUIRE_TWO_FACTOR": False,
+        "TOTP_ENCRYPTION_KEY": None,
+        "SMTP_HOST": None,
+        "SMTP_FROM_ADDRESS": None,
+        "MAIL_SUPPRESS_SEND": False,
         "TENANT_PII_ENCRYPTION_KEY": (
             "MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA="
         ),

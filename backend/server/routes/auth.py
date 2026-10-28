@@ -799,6 +799,7 @@ def get_factor_methods():
         return {"error": "User not found"}, 404
     return {
         "methods": available_factor_methods(user),
+        "two_factor_required": bool(current_app.config.get("REQUIRE_TWO_FACTOR")),
         "sms_configured": sms_delivery_configured(),
         "phone_verified": user.mfa_phone_verified,
         "phone": mask_phone(user.mfa_phone) if user.mfa_phone_verified and user.mfa_phone else None,
