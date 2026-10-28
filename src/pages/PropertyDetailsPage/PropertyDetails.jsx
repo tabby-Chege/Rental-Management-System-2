@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
 import {
   getPublicProperty,
@@ -13,6 +13,7 @@ import {
 } from "../../api/tenantProfilesApi";
 import { formatBedroomCount, formatUnitType } from "../../utils/unitForm";
 import { formatMoney } from "../../utils/money";
+import ListingImage from "../../components/ListingImage.jsx";
 import {
   deletePhoto,
   photoUrl,
@@ -57,6 +58,14 @@ function PropertyDetailsPage() {
   const [reportMessage, setReportMessage] = useState("");
   const [reportError, setReportError] = useState("");
   const [retryCount, setRetryCount] = useState(0);
+  const inquiryMessageRef = useRef(null);
+
+  function signInReturnTo(intent, unitId) {
+    const params = new URLSearchParams({ intent });
+    if (unitId) params.set("unit_id", String(unitId));
+    const unitHash = unitId ? `#unit-${encodeURIComponent(unitId)}` : "";
+    return `/properties/${encodeURIComponent(id)}?${params.toString()}${unitHash}`;
+  }
 
   useEffect(() => {
     let ignore = false;
@@ -113,6 +122,28 @@ function PropertyDetailsPage() {
       document.getElementById(location.hash.slice(1))?.scrollIntoView({ block: "center" });
     }
   }, [isLoading, location.hash, units]);
+
+  useEffect(() => {
+    if (!property || !user || location.search === "") return;
+    const params = new URLSearchParams(location.search);
+    const intent = params.get("intent");
+    if (intent === "contact" && user.role === "tenant") {
+      navigate(`${location.pathname}${location.hash}`, { replace: true });
+      window.requestAnimationFrame(() => inquiryMessageRef.current?.focus());
+    } else if (intent === "apply" && user.role === "tenant" && units.length > 0) {
+      const selectedUnit = units.find(
+        (unit) => String(unit.id) === params.get("unit_id"),
+      );
+      if (selectedUnit) {
+        setApplicationError("");
+        setApplicationStep(1);
+        setApplicationUnit(selectedUnit);
+      } else {
+        setApplicationError("That unit is no longer available. Please choose another.");
+      }
+      navigate(`${location.pathname}${location.hash}`, { replace: true });
+    }
+  }, [property, user, units, location.search, location.pathname, location.hash, navigate]);
 
   useEffect(() => {
     if (user?.role !== "tenant" || units.length === 0) return undefined;
@@ -347,6 +378,11 @@ function PropertyDetailsPage() {
           {property.postal_code || property.zip_code ? ` ${property.postal_code || property.zip_code}` : ""}
           {property.country ? `, ${property.country}` : ""}
         </p>
+        {property.manager?.name && (
+          <p className="details-manager">
+            Managed by <strong>{property.manager.name}</strong>
+          </p>
+        )}
       </header>
       {canManagePhotos && (
         <nav className="property-workspace-tabs" aria-label={`${property.name} management`}>
@@ -391,6 +427,7 @@ function PropertyDetailsPage() {
             <label>
               Your message
               <textarea
+                ref={inquiryMessageRef}
                 value={inquiryBody}
                 maxLength={5000}
                 required
@@ -406,7 +443,12 @@ function PropertyDetailsPage() {
       )}
       {!user && (
         <p className="details-inquiry-login">
-          <Link to="/login">Log in as a tenant to ask the landlord a question</Link>
+          <Link
+            to="/login"
+            state={{ returnTo: signInReturnTo("contact") }}
+          >
+            Sign in as a tenant to message the property manager
+          </Link>
         </p>
       )}
       {(property.photos?.length > 0 || canManagePhotos) && (
@@ -416,7 +458,12 @@ function PropertyDetailsPage() {
             <div className="listing-photo-gallery">
               {property.photos.map((photo) => (
                 <figure key={photo.id} className="listing-photo">
-                  <img src={photoUrl(photo)} alt={`${property.name} property`} />
+                  <ListingImage
+                    src={photoUrl(photo)}
+                    alt={`${property.name} property`}
+                    className="listing-detail-image"
+                    fallbackClassName="listing-image-unavailable"
+                  />
                   {photo.is_cover && <figcaption>Cover photo</figcaption>}
                   {canManagePhotos && (
                     <div className="photo-actions">
@@ -527,9 +574,11 @@ function PropertyDetailsPage() {
                           const room = unit.rooms?.find((item) => item.id === photo.room_id);
                           return (
                             <figure key={photo.id} className="listing-photo">
-                              <img
+                              <ListingImage
                                 src={photoUrl(photo)}
                                 alt={`${unit.unit_number}${room ? ` ${room.name}` : ""}`}
+                                className="listing-detail-image"
+                                fallbackClassName="listing-image-unavailable"
                               />
                               {room && <figcaption>{room.name}</figcaption>}
                               {photo.is_cover && <figcaption>Cover photo</figcaption>}
@@ -606,6 +655,15 @@ function PropertyDetailsPage() {
                 >
                   {unit.availability_status === "reserved" ? "Join waitlist" : "Apply"}
                 </button>
+              )}
+              {!user && ["vacant", "reserved"].includes(unit.availability_status) && (
+                <Link
+                  className="manage-button"
+                  to="/login"
+                  state={{ returnTo: signInReturnTo("apply", unit.id) }}
+                >
+                  {unit.availability_status === "reserved" ? "Sign in to join waitlist" : "Sign in to apply"}
+                </Link>
               )}
               {unit.has_pending_application && <span>Application submitted</span>}
             </li>
@@ -728,7 +786,6 @@ function PropertyDetailsPage() {
           <p className="details-error" role="alert">{applicationError}</p>
         )}
         {applicationMessage && <p role="status">{applicationMessage}</p>}
-        {!user && <p><Link to="/login">Log in as a tenant to apply</Link></p>}
         {user && user.role !== "tenant" && (
           <p>Applications are available to tenant accounts.</p>
         )}

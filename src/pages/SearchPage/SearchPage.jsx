@@ -4,6 +4,7 @@ import SearchBar from "../../Components/SearchBar/SearchBar";
 import { listPublicUnits } from "../../api/propertiesApi";
 import { formatBedroomCount, formatUnitType } from "../../utils/unitForm";
 import { formatMoney } from "../../utils/money";
+import ListingImage from "../../components/ListingImage.jsx";
 import "./SearchPage.css";
 
 const PER_PAGE = 9;
@@ -304,14 +305,12 @@ function SearchPage() {
                 className="property-card"
               >
                 <div className="property-card-image">
-                  {unit.photo_url ? (
-                    <img src={unit.photo_url} alt={`${unit.property_name}, Unit ${unit.unit_number}`} loading="lazy" />
-                  ) : (
-                    <div className="property-card-placeholder" aria-hidden="true">
-                      <span>⌂</span>
-                      <small>A place to belong</small>
-                    </div>
-                  )}
+                  <ListingImage
+                    src={unit.photo_url}
+                    alt={`${unit.property_name}, Unit ${unit.unit_number}`}
+                    className=""
+                    fallbackClassName="property-card-placeholder"
+                  />
                   <span className={`unit-availability is-${unit.availability_status}`}>
                   {unit.availability_status === "occupied"
                     ? "Occupied"

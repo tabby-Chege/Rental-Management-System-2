@@ -236,7 +236,7 @@ def upgrade():
     sa.Column('object_key', sa.String(length=64), nullable=False),
     sa.Column('content_type', sa.String(length=20), nullable=False),
     sa.Column('file_size', sa.Integer(), nullable=False),
-    sa.Column('is_cover', sa.Boolean(), server_default='0', nullable=False),
+    sa.Column('is_cover', sa.Boolean(), server_default=sa.text('false'), nullable=False),
     sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
     sa.CheckConstraint('(property_id IS NOT NULL AND unit_id IS NULL) OR (property_id IS NULL AND unit_id IS NOT NULL)', name='ck_property_photos_single_listing'),
     sa.CheckConstraint('room_id IS NULL OR unit_id IS NOT NULL', name='ck_property_photos_room_requires_unit'),
@@ -521,7 +521,7 @@ def upgrade():
         batch_op.add_column(sa.Column('layout', sa.String(length=20), nullable=True))
         batch_op.add_column(sa.Column('size', sa.Numeric(precision=12, scale=2), nullable=True))
         batch_op.add_column(sa.Column('size_unit', sa.String(length=20), nullable=True))
-        batch_op.add_column(sa.Column('furnished', sa.Boolean(), nullable=True))
+        batch_op.add_column(sa.Column('furnished', sa.Boolean(), server_default=sa.text('false'), nullable=True))
 
     op.execute(sa.text("""
         UPDATE units
@@ -551,10 +551,10 @@ def upgrade():
         batch_op.add_column(sa.Column('email_verified_at', sa.DateTime(timezone=True), nullable=True))
         batch_op.add_column(sa.Column('totp_secret', sa.Text(), nullable=True))
         batch_op.add_column(sa.Column('totp_pending_secret', sa.Text(), nullable=True))
-        batch_op.add_column(sa.Column('totp_enabled', sa.Boolean(), server_default='0', nullable=False))
+        batch_op.add_column(sa.Column('totp_enabled', sa.Boolean(), server_default=sa.text('false'), nullable=False))
         batch_op.add_column(sa.Column('totp_last_counter', sa.Integer(), nullable=True))
         batch_op.add_column(sa.Column('mfa_phone', sa.String(length=20), nullable=True))
-        batch_op.add_column(sa.Column('mfa_phone_verified', sa.Boolean(), server_default='0', nullable=False))
+        batch_op.add_column(sa.Column('mfa_phone_verified', sa.Boolean(), server_default=sa.text('false'), nullable=False))
         batch_op.add_column(sa.Column('failed_login_attempts', sa.Integer(), server_default='0', nullable=False))
         batch_op.add_column(sa.Column('login_attempt_window_started_at', sa.DateTime(timezone=True), nullable=True))
         batch_op.add_column(sa.Column('locked_until', sa.DateTime(timezone=True), nullable=True))

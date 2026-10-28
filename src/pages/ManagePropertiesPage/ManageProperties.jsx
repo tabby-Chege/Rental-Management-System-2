@@ -15,6 +15,7 @@ import {
   PROPERTY_COUNTRIES,
   currencyForCountry,
   currencyPrecision,
+  moneyInputBounds,
 } from "../../utils/money";
 import { validateUnitForm } from "../../utils/unitForm";
 import "./ManageProperties.css";
@@ -131,6 +132,7 @@ function ManagePropertiesPage() {
   const [uploadedPropertyPhotoCount, setUploadedPropertyPhotoCount] = useState(0);
   const [pendingUnitPropertyId, setPendingUnitPropertyId] = useState(null);
   const [wholeUnitId, setWholeUnitId] = useState(null);
+  const rentInputBounds = moneyInputBounds(form.currency);
 
   useEffect(() => {
     if (!loggedIn) return undefined;
@@ -733,9 +735,7 @@ async function handleEdit(property) {
           name="rent_amount"
           value={unitForm.rent_amount}
           onChange={handleUnitChange}
-          min="0.01"
-          max="99999999.99"
-          step={10 ** -currencyPrecision(form.currency)}
+          {...rentInputBounds}
           required
         />
       </label>

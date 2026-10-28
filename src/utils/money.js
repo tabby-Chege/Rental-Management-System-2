@@ -31,6 +31,16 @@ export function currencyPrecision(currency) {
   }).resolvedOptions().maximumFractionDigits;
 }
 
+export function moneyInputBounds(currency) {
+  const precision = currencyPrecision(currency);
+  const smallestAmount = 10 ** -precision;
+  return {
+    min: String(smallestAmount),
+    max: (1_000_000_000 - smallestAmount).toFixed(precision),
+    step: String(smallestAmount),
+  };
+}
+
 export function phoneParts(phone) {
   const country = PHONE_COUNTRIES
     .filter(({ dialCode }) => phone?.startsWith(dialCode))

@@ -1,8 +1,17 @@
 from tests.test_tenants import client, world  # noqa: F401
 from tests.test_applications import create_unit
+from server.extensions import db
+from server.models_tenant import TenantProfile
 
 
 def test_tenant_can_ask_about_a_property_before_applying(client, world):
+    with client.application.app_context():
+        profile = TenantProfile.query.filter_by(
+            user_id=world["ids"]["tenant_user"]
+        ).one()
+        db.session.delete(profile)
+        db.session.commit()
+
     unit_id = create_unit(client, world["landlord"])
     property_id = client.get(
         f"/api/units/{unit_id}", headers=world["landlord"]

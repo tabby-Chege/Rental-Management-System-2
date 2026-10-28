@@ -141,12 +141,35 @@
   background: rgba(249,250,251,0.86);
 }
 
-.listing-photo img {
+.listing-detail-image,
+.listing-image-unavailable {
   display: block;
   width: 100%;
   aspect-ratio: 4 / 3;
-  object-fit: cover;
   border-radius: 12px;
+}
+
+.listing-detail-image {
+  object-fit: cover;
+}
+
+.listing-image-unavailable {
+  display: grid;
+  align-content: center;
+  justify-items: center;
+  gap: 6px;
+  background: linear-gradient(145deg, #edf1e9, #dce7dc);
+  color: #657969;
+}
+
+.listing-image-unavailable > span {
+  font-size: 42px;
+  line-height: 1;
+}
+
+.details-manager {
+  margin: 10px 0 0;
+  color: var(--muted);
 }
 
 .listing-photo figcaption {

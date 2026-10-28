@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 import QRCode from "qrcode";
 import {
   prepareRequestOptions,
@@ -19,8 +19,10 @@ import {
   verifyLoginFactorCode,
   verifyRecoveryCode,
 } from "../../api/authAPI";
+import { safeReturnTo } from "../../utils/authRedirect.js";
 
 function Login() {
+  const location = useLocation();
   const navigate = useNavigate();
   const googleButtonRef = useRef(null);
   const totpQrRef = useRef(null);
@@ -123,6 +125,14 @@ function Login() {
   }, [googleClientId, googleScriptReady]);
 
   function finishSignIn(user) {
+    const returnTo =
+      safeReturnTo(location.state?.returnTo) ||
+      safeReturnTo(sessionStorage.getItem("login_return_to"));
+    sessionStorage.removeItem("login_return_to");
+    if (returnTo) {
+      navigate(returnTo, { replace: true });
+      return;
+    }
     if (user?.role === "tenant") {
       navigate("/tenant/details", { replace: true });
     } else {
@@ -358,6 +368,8 @@ function Login() {
       }
       sessionStorage.setItem("github_oauth_state", authorizationState);
       sessionStorage.setItem("github_oauth_role", githubRole);
+      const returnTo = safeReturnTo(location.state?.returnTo);
+      if (returnTo) sessionStorage.setItem("login_return_to", returnTo);
       window.location.assign(authorizationUrl);
     } catch (requestError) {
       setError(requestError.message || "GitHub sign-in could not be started.");

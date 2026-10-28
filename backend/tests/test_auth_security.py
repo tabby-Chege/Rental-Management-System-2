@@ -469,6 +469,7 @@ def test_email_code_is_hashed_limited_and_single_use(client, world, monkeypatch)
     )
     assert methods_after_refresh.status_code == 200
     methods_data = methods_after_refresh.get_json()
+    assert methods_data["two_factor_required"] is True
     assert methods_data["sms_configured"] is False
     assert all(method["id"] != "sms" for method in methods_data["methods"])
     assert client.post(

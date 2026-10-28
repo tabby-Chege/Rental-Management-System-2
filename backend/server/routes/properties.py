@@ -379,7 +379,11 @@ def get_public_property(property_id):
     if not prop:
         return {"error": "Property not found"}, 404
     summary = property_occupancy([prop])[prop.id]
-    return {"property": property_json(prop, summary)}, 200
+    payload = property_json(prop, summary)
+    manager = db.session.get(User, prop.owner_id)
+    if manager:
+        payload["manager"] = {"name": manager.name}
+    return {"property": payload}, 200
 
 
 @properties_bp.route("/public/<int:property_id>/units", methods=["GET"])

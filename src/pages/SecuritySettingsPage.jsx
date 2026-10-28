@@ -138,7 +138,11 @@ function SecuritySettingsPage() {
           <p>Manage your sign-in safeguards and recovery options in one place.</p>
           <div className="security-hero-badge">
             <span aria-hidden="true">✓</span>
-            Authenticator verification is required
+            {settings
+              ? settings.two_factor_required
+                ? "Two-step verification is required"
+                : "Two-step verification is optional"
+              : "Loading verification policy…"}
           </div>
         </div>
         <div className="security-hero-mark" aria-hidden="true">
@@ -184,7 +188,11 @@ function SecuritySettingsPage() {
                 </div>
               ))}
             </div>
-            <p className="security-card-note">Your password is always protected by authenticator-app verification. Add a recovery option in case you lose access to a device.</p>
+            <p className="security-card-note">
+              {settings.two_factor_required
+                ? "Two-step verification is required for this server. Use any active method listed above; configure a recovery method if available."
+                : "Two-step verification is optional for this server. Add an available verification method to strengthen your account."}
+            </p>
           </section>
 
           <div className="security-settings-grid">

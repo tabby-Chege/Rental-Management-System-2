@@ -5,6 +5,7 @@ import {
   currencyPrecision,
   formatMoney,
   makeInternationalPhone,
+  moneyInputBounds,
   phoneParts,
 } from "./money.js";
 
@@ -20,6 +21,24 @@ test("money formatting follows currency-specific digits and symbols", () => {
     formatMoney(1234, "JPY"),
     new Intl.NumberFormat(undefined, { style: "currency", currency: "JPY" }).format(1234)
   );
+});
+
+test("money input bounds honor currency precision and the API limit", () => {
+  assert.deepEqual(moneyInputBounds("JPY"), {
+    min: "1",
+    max: "999999999",
+    step: "1",
+  });
+  assert.deepEqual(moneyInputBounds("KES"), {
+    min: "0.01",
+    max: "999999999.99",
+    step: "0.01",
+  });
+  assert.deepEqual(moneyInputBounds("KWD"), {
+    min: "0.001",
+    max: "999999999.999",
+    step: "0.001",
+  });
 });
 
 test("phone code picker values create E.164 numbers and split saved numbers", () => {

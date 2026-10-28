@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
+import { getCurrentUser } from "../../api/authAPI";
 import { getMyTenant } from "../../api/tenantsApi";
 import {
   deleteTenantDocument,
@@ -48,18 +49,21 @@ function TenantDetailsPage() {
     let ignore = false;
     async function loadDetails() {
       try {
-        const [profileResult, tenantResult] = await Promise.all([
+        const [profileResult, tenantResult, accountResult] = await Promise.all([
           getMyTenantProfile(),
           getMyTenant().catch((requestError) => {
             if (requestError.status === 404) return null;
             throw requestError;
           }),
+          getCurrentUser(),
         ]);
         if (ignore) return;
         setProfile(profileResult.profile);
         setDocuments(profileResult.documents ?? []);
         if (profileResult.profile) {
           setForm(profileToForm(profileResult.profile));
+        } else {
+          setForm({ ...EMPTY_PROFILE, full_name: accountResult.user?.name ?? "" });
         }
         setResidences(tenantResult?.current_residences ?? []);
       } catch (requestError) {
@@ -217,7 +221,30 @@ function TenantDetailsPage() {
             <h2>Employment</h2>
             <label className="manage-field">
               <span>Employment status</span>
-              <input name="employment_status" value={form.employment_status} maxLength={40} required onChange={updateField} />
+              <select
+                name="employment_status"
+                value={form.employment_status}
+                required
+                onChange={updateField}
+              >
+                <option value="">Choose employment status</option>
+                <option value="employed">Employed</option>
+                <option value="self_employed">Self-employed</option>
+                <option value="student">Student</option>
+                <option value="unemployed">Unemployed</option>
+                <option value="retired">Retired</option>
+                <option value="other">Other</option>
+                {form.employment_status && ![
+                  "employed",
+                  "self_employed",
+                  "student",
+                  "unemployed",
+                  "retired",
+                  "other",
+                ].includes(form.employment_status) && (
+                  <option value={form.employment_status}>{form.employment_status}</option>
+                )}
+              </select>
             </label>
             <label className="manage-field">
               <span>Employer (optional)</span>
@@ -270,7 +297,10 @@ function TenantDetailsPage() {
             <div className="tenant-identity-upload">
               <div>
                 <strong>Identity photo</strong>
-                <p>Upload a clear photo or scan, or a PDF copy of the ID shown above. Up to 10 MB.</p>
+                <p>
+                  Upload is optional. Existing documents below are available for
+                  future applications; upload only if you need to add or replace one.
+                </p>
               </div>
               <label className="tenant-upload-button">
                 <span>{uploading ? "Uploading…" : "Upload ID photo"}</span>
