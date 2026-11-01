@@ -16,8 +16,11 @@ async function mediaRequest(path, options = {}) {
   return body;
 }
 
+const BASE_URL = import.meta.env?.VITE_API_URL || "";
+
 export function photoUrl(photo) {
-  return photo?.url || "";
+  const url = photo?.url || "";
+  return url.startsWith("/") ? `${BASE_URL}${url}` : url;
 }
 
 export function uploadPropertyPhoto(propertyId, file, { isCover = false } = {}) {
