@@ -14,7 +14,6 @@ import {
   CURRENCY_CODES,
   PROPERTY_COUNTRIES,
   currencyForCountry,
-  currencyPrecision,
   moneyInputBounds,
 } from "../../utils/money";
 import { validateUnitForm } from "../../utils/unitForm";
@@ -120,6 +119,7 @@ function ManagePropertiesPage() {
   const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(loggedIn);
   const [loadError, setLoadError] = useState(null);
+  const [summaryError, setSummaryError] = useState(null);
   const [reloadCount, setReloadCount] = useState(0);
 
   const [form, setForm] = useState(EMPTY_FORM);
@@ -139,12 +139,11 @@ function ManagePropertiesPage() {
 
     let ignore = false; // stops an old request from overwriting a newer one
 
-    Promise.all([listProperties({ page }), getPropertiesSummary()])
-      .then(([data, summary]) => {
+    listProperties({ page })
+      .then((data) => {
         if (!ignore) {
           setProperties(data.properties);
           setPagination(data.pagination);
-          setPortfolioSummary(summary);
           setLoadError(null);
         }
       })
@@ -159,6 +158,26 @@ function ManagePropertiesPage() {
       ignore = true;
     };
   }, [loggedIn, page, reloadCount]);
+
+  useEffect(() => {
+    if (!loggedIn) return undefined;
+
+    let ignore = false;
+    getPropertiesSummary()
+      .then((summary) => {
+        if (!ignore) {
+          setPortfolioSummary(summary);
+          setSummaryError(null);
+        }
+      })
+      .catch((err) => {
+        if (!ignore) setSummaryError(err.message);
+      });
+
+    return () => {
+      ignore = true;
+    };
+  }, [loggedIn, reloadCount]);
 
   function handleChange(event) {
     const { name, value } = event.target;
@@ -322,6 +341,9 @@ async function handleEdit(property) {
 
       propertyId = created.id;
       setPendingUnitPropertyId(propertyId);
+      setLoading(true);
+      setLoadError(null);
+      setSummaryError(null);
 
       if (page === 1) {
         setProperties((current) =>
@@ -379,10 +401,9 @@ async function handleEdit(property) {
     try {
       await deleteProperty(property.id);
       if (editingId === property.id) resetForm();
+      handleRetry();
       if (properties.length === 1 && page > 1) {
         setPage((current) => current - 1);
-      } else {
-        handleRetry();
       }
     } catch (err) {
       setLoadError(err.message);
@@ -392,7 +413,14 @@ async function handleEdit(property) {
   function handleRetry() {
     setLoading(true);
     setLoadError(null);
+    setSummaryError(null);
     setReloadCount((count) => count + 1);
+  }
+
+  function changePage(nextPage) {
+    setLoading(true);
+    setLoadError(null);
+    setPage(nextPage);
   }
 
   function closeForm() {
@@ -447,6 +475,12 @@ async function handleEdit(property) {
             <div><strong>{portfolioSummary.occupancy_summary.vacant_units}</strong><span>Vacant</span></div>
           </div>
         </section>
+      )}
+      {summaryError && (
+        <p className="manage-error" role="alert">
+          Portfolio summary unavailable: {summaryError}{" "}
+          <button type="button" onClick={handleRetry}>Try again</button>
+        </p>
       )}
 
       {formOpen && (
@@ -932,7 +966,7 @@ async function handleEdit(property) {
             <nav className="pagination-controls" aria-label="Property pages">
               <button
                 type="button"
-                onClick={() => setPage((current) => current - 1)}
+                onClick={() => changePage(page - 1)}
                 disabled={!pagination.has_prev}
               >
                 Previous
@@ -942,7 +976,7 @@ async function handleEdit(property) {
               </span>
               <button
                 type="button"
-                onClick={() => setPage((current) => current + 1)}
+                onClick={() => changePage(page + 1)}
                 disabled={!pagination.has_next}
               >
                 Next

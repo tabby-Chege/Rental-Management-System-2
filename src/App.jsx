@@ -34,7 +34,10 @@ import "./App.css";
 
 function AppShellNav() {
   const [user, setUser] = useState(null);
+  const [userToken, setUserToken] = useState("");
   const [failedToken, setFailedToken] = useState("");
+  const [accountError, setAccountError] = useState("");
+  const [accountRetryCount, setAccountRetryCount] = useState(0);
   const [unreadMessages, setUnreadMessages] = useState(0);
   const navigate = useNavigate();
   const location = useLocation();
@@ -45,20 +48,30 @@ function AppShellNav() {
     let ignore = false;
     getCurrentUser()
       .then(({ user: currentUser }) => {
-        if (!ignore) setUser(currentUser);
+        if (!ignore) {
+          setUser(currentUser);
+          setUserToken(token);
+          setFailedToken("");
+          setAccountError("");
+        }
       })
       .catch((error) => {
         if (!ignore) {
           console.error("Could not load the signed-in account.", error);
           setUser(null);
+          setUserToken("");
           setFailedToken(token);
+          setAccountError(
+            error.message || "Your account could not be loaded. Please try again.",
+          );
         }
       });
     return () => {
       ignore = true;
     };
-  }, [token]);
-  const userLoading = Boolean(token) && !user && failedToken !== token;
+  }, [token, accountRetryCount]);
+  const currentUser = userToken === token ? user : null;
+  const userLoading = Boolean(token) && !currentUser && failedToken !== token;
 
   const handleLogout = async () => {
     try {
@@ -67,13 +80,15 @@ function AppShellNav() {
       console.error("Server sign-out could not revoke the refresh token.", error);
     } finally {
       setUser(null);
+      setUserToken("");
       setFailedToken("");
+      setAccountError("");
       navigate("/login", { replace: true });
     }
   };
 
-  const isLandlord = user?.role === "landlord" || user?.role === "admin";
-  const isTenant = user?.role === "tenant";
+  const isLandlord = currentUser?.role === "landlord" || currentUser?.role === "admin";
+  const isTenant = currentUser?.role === "tenant";
   const navigation = isLandlord
     ? [
         ["Dashboard", "/dashboard"],
@@ -104,7 +119,7 @@ function AppShellNav() {
       : [];
 
   useEffect(() => {
-    if (!token || !user || !["landlord", "admin", "tenant"].includes(user.role)) return undefined;
+    if (!token || !currentUser || !["landlord", "admin", "tenant"].includes(currentUser.role)) return undefined;
     let ignore = false;
     async function refreshUnread() {
       try {
@@ -124,30 +139,51 @@ function AppShellNav() {
       ignore = true;
       window.clearInterval(interval);
     };
-  }, [token, user, location.pathname]);
+  }, [token, currentUser, location.pathname]);
 
   return (
-    <div className={`app-shell${user ? " has-sidebar" : ""}`}>
+    <div className={`app-shell${currentUser ? " has-sidebar" : ""}`}>
       <header className="app-header">
         <Link to="/" className="app-brand" aria-label="Property Finder home">
           <span className="app-brand-mark" aria-hidden="true">P</span>
           <span className="app-brand-name">
             <strong>Property Finder</strong>
-            <small>{user ? `${user.role} account` : "PROPERTY RECORDS"}</small>
+            <small>{currentUser ? `${currentUser.role} account` : "PROPERTY RECORDS"}</small>
           </span>
         </Link>
         <div className="app-header-actions">
           <Link className="app-search-link" to="/properties">Search properties</Link>
-          {user && (
+          {currentUser && (
             <details className="app-account-menu">
-              <summary>{user.name || user.email || user.role}</summary>
+              <summary>{currentUser.name || currentUser.email || currentUser.role}</summary>
               <div>
-                <span>{user.email || `${user.role} account`}</span>
+                <span>{currentUser.email || `${currentUser.role} account`}</span>
                 <button type="button" className="app-logout-button" onClick={handleLogout}>Sign out</button>
               </div>
             </details>
           )}
-          {!user && (
+          {!currentUser && token && (
+            <div className={`app-account-status${userLoading ? "" : " is-error"}`} role={userLoading ? "status" : "alert"}>
+              {userLoading ? (
+                "Loading account…"
+              ) : (
+                <>
+                  <span>{accountError || "Your account could not be loaded."}</span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setFailedToken("");
+                      setAccountError("");
+                      setAccountRetryCount((count) => count + 1);
+                    }}
+                  >
+                    Try again
+                  </button>
+                </>
+              )}
+            </div>
+          )}
+          {!currentUser && !token && (
             <>
               <Link className="app-search-link" to="/login">Sign in</Link>
               <Link className="app-search-link" to="/register">Create account</Link>
@@ -156,7 +192,7 @@ function AppShellNav() {
         </div>
       </header>
       <div className="app-workspace">
-      {user && (
+      {currentUser && (
         <aside className="app-sidebar">
           <p className="app-sidebar-label">WORKSPACE</p>
           <nav aria-label="Main navigation">
@@ -180,7 +216,7 @@ function AppShellNav() {
       )}
       <main className="app-main">
         <Routes>
-          <Route path="/" element={userLoading ? <p className="app-route-loading">Loading your workspace…</p> : <Navigate to={user ? "/dashboard" : "/properties"} replace />} />
+          <Route path="/" element={userLoading ? <p className="app-route-loading">Loading your workspace…</p> : <Navigate to={currentUser ? "/dashboard" : "/properties"} replace />} />
           <Route path="/dashboard" element={
             userLoading
               ? <p className="app-route-loading">Loading your workspace…</p>

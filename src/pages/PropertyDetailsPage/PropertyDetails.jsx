@@ -31,9 +31,11 @@ function PropertyDetailsPage() {
   const selectedUnitId = location.hash.startsWith("#unit-")
     ? location.hash.slice("#unit-".length)
     : "";
+  const token = getToken();
   const [property, setProperty] = useState(null);
   const [units, setUnits] = useState([]);
-  const [user, setUser] = useState(null);
+  const [userState, setUserState] = useState({ token, user: null });
+  const user = userState.token === token ? userState.user : null;
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState("");
   const [applicationError, setApplicationError] = useState("");
@@ -94,10 +96,10 @@ function PropertyDetailsPage() {
     }
 
     loadProperty();
-    if (getToken()) {
+    if (token) {
       getCurrentUser()
         .then(async ({ user: currentUser }) => {
-          if (!ignore) setUser(currentUser);
+          if (!ignore) setUserState({ token, user: currentUser });
           if (currentUser.role === "tenant") {
             const profileResult = await getMyTenantProfile();
             if (!ignore) {
@@ -107,15 +109,13 @@ function PropertyDetailsPage() {
           }
         })
         .catch(() => {
-          if (!ignore) setUser(null);
+          if (!ignore) setUserState({ token, user: null });
         });
-    } else {
-      setUser(null);
     }
     return () => {
       ignore = true;
     };
-  }, [id, retryCount, selectedUnitId]);
+  }, [id, retryCount, selectedUnitId, token]);
 
   useEffect(() => {
     if (!isLoading && location.hash.startsWith("#unit-")) {
@@ -135,7 +135,6 @@ function PropertyDetailsPage() {
         (unit) => String(unit.id) === params.get("unit_id"),
       );
       if (selectedUnit) {
-        setApplicationError("");
         setApplicationStep(1);
         setApplicationUnit(selectedUnit);
       } else {
@@ -330,9 +329,11 @@ function PropertyDetailsPage() {
     }
   }
 
-  const canManagePhotos =
-    user?.role === "admin" ||
-    (user?.role === "landlord" && user.id === property.owner_id);
+  const canManagePhotos = Boolean(
+    property &&
+      (user?.role === "admin" ||
+        (user?.role === "landlord" && user.id === property.owner_id)),
+  );
 
   if (isLoading) {
     return (
@@ -692,9 +693,15 @@ function PropertyDetailsPage() {
             {applicationStep === 2 && (
               <div>
                 <h4>2. Supporting documents</h4>
-                <p>Upload identity or supporting documents. Documents are private and optional.</p>
+                <p>
+                  {profileDocuments.length > 0
+                    ? "Documents already in your profile are included automatically. Add another only if you need to."
+                    : "You can add private identity or supporting documents now or later; uploads are optional."}
+                </p>
                 <label>
-                  Add a document
+                  {profileDocuments.length > 0
+                    ? "Add another document (optional)"
+                    : "Add a document (optional)"}
                   <input
                     type="file"
                     accept="application/pdf,image/jpeg,image/png,image/webp"

@@ -93,6 +93,30 @@ npm run dev
 
 Vite proxies `/api` requests to the Flask service at `http://localhost:5000`. Register an account in the app to create a landlord account, then add properties and units. Tenant records appear after an application is approved; landlords cannot create them manually. Do not place database credentials or JWT secrets in frontend environment variables.
 
+### Optional local demo listings
+
+To populate a local development database with 12 fictional properties and units, first configure a persistent local database and apply its migrations. The seed command requires explicit development-only opt-ins, refuses remote databases, creates a dedicated demo landlord, and never overwrites existing accounts or listings.
+
+From `backend/`, set a local database and development-only credentials, then run:
+
+```sh
+export DATABASE_URL=sqlite:////tmp/rental-demo.db
+export JWT_SECRET_KEY=replace-with-a-random-local-secret-of-at-least-32-characters
+export CORS_ORIGINS=http://localhost:5173
+export REQUIRE_TWO_FACTOR=false
+export APP_ENV=development
+export ENABLE_DEMO_DATA=true
+export DEMO_LANDLORD_PASSWORD=replace-with-a-strong-development-only-password
+flask --app run.py db upgrade
+python scripts/seed_demo_properties.py --confirm-development-data
+```
+
+The demo account email defaults to `demo-landlord@example.test` and can be changed with `DEMO_LANDLORD_EMAIL`. Sample listings are labeled as fictional and are not intended for real rentals. Do not use demo credentials or seed data in production.
+
+### Browser end-to-end tests
+
+Install the frontend and backend dependencies, install Chromium with `npx playwright install chromium`, then run `npm run test:e2e`. The test runner starts a temporary file-backed SQLite API and the Vite app; it exercises landlord listing creation, tenant contact without a profile, sign-in return to a selected unit, profile/document reuse, application submission and approval, multiple photos, and validation failures. Set `PLAYWRIGHT_PYTHON` if the Python interpreter is not at `backend/.venv/bin/python`.
+
 ## API Overview
 
 Authentication endpoints are `POST /api/auth/register`, `POST /api/auth/login`, `POST /api/auth/refresh`, and `POST /api/auth/logout`. Access tokens expire after 15 minutes; refresh tokens expire after 30 days and are rotated on refresh. The frontend automatically refreshes access tokens for protected API requests.

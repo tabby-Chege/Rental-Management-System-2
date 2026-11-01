@@ -31,8 +31,23 @@ function SecuritySettingsPage() {
   }, []);
 
   useEffect(() => {
-    void loadSettings();
-  }, [loadSettings]);
+    let ignore = false;
+    async function loadInitialSettings() {
+      try {
+        const result = await getFactorMethods();
+        if (!ignore) setSettings(result);
+      } catch (requestError) {
+        if (!ignore) {
+          setError(requestError.message || "Security settings could not be loaded.");
+        }
+      }
+    }
+
+    void loadInitialSettings();
+    return () => {
+      ignore = true;
+    };
+  }, []);
 
   async function handlePhoneRequest(event) {
     event.preventDefault();

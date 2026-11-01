@@ -1,39 +1,44 @@
 import { useEffect, useState } from "react";
 import { Navigate, Outlet, useLocation } from "react-router-dom";
-import { clearToken, getCurrentUser, getToken } from "../api/authAPI";
+import { getCurrentUser, getToken } from "../api/authAPI";
 
 function ProtectedRoute({ allowedRoles }) {
   const location = useLocation();
   const token = getToken();
-  const [user, setUser] = useState(null);
-  const [loading, setLoading] = useState(Boolean(token));
+  const [authState, setAuthState] = useState({
+    token: null,
+    user: null,
+    error: "",
+  });
+  const [retryCount, setRetryCount] = useState(0);
 
   useEffect(() => {
     let ignore = false;
-    if (!token) {
-      setUser(null);
-      setLoading(false);
-      return () => {
-        ignore = true;
-      };
-    }
-
-    setLoading(true);
+    if (!token) return undefined;
     getCurrentUser()
       .then(({ user: currentUser }) => {
-        if (!ignore) setUser(currentUser);
+        if (!ignore) {
+          setAuthState({ token, user: currentUser, error: "" });
+        }
       })
-      .catch(() => {
-        clearToken();
-        if (!ignore) setUser(null);
-      })
-      .finally(() => {
-        if (!ignore) setLoading(false);
+      .catch((requestError) => {
+        if (!ignore) {
+          setAuthState({
+            token,
+            user: null,
+            error:
+              requestError.message ||
+              "Your account could not be verified. Please try again.",
+          });
+        }
       });
     return () => {
       ignore = true;
     };
-  }, [token]);
+  }, [token, retryCount]);
+
+  const stateMatchesToken = authState.token === token;
+  const user = stateMatchesToken ? authState.user : null;
 
   if (!token) {
     return (
@@ -47,8 +52,18 @@ function ProtectedRoute({ allowedRoles }) {
     );
   }
 
-  if (loading) {
+  if (!stateMatchesToken) {
     return <p className="manage-status" role="status">Checking your account…</p>;
+  }
+  if (authState.error) {
+    return (
+      <div className="app-request-error" role="alert">
+        <p>{authState.error}</p>
+        <button type="button" onClick={() => setRetryCount((count) => count + 1)}>
+          Try again
+        </button>
+      </div>
+    );
   }
   if (!user) {
     return (
