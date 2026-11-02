@@ -1,4 +1,4 @@
-from flask import Flask, jsonify
+from flask import Flask, current_app, jsonify
 from flask_cors import CORS
 from flask_migrate import Migrate
 from pathlib import Path
@@ -55,6 +55,8 @@ def create_app(test_config=None):
     if test_config:
         app.config.update(test_config)
 
+    if not app.testing and not app.config.get("REQUIRE_TWO_FACTOR"):
+        raise RuntimeError("Two-factor authentication is mandatory and cannot be disabled")
     if not app.config.get("SQLALCHEMY_DATABASE_URI"):
         raise RuntimeError("Set DATABASE_URL or SQLALCHEMY_DATABASE_URI before starting the API")
     jwt_secret = app.config.get("JWT_SECRET_KEY")
@@ -71,7 +73,11 @@ def create_app(test_config=None):
             r"/api/*": {
                 "origins": app.config["CORS_ORIGINS"],
                 "methods": ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-                "allow_headers": ["Authorization", "Content-Type"],
+                "allow_headers": [
+                    "Authorization",
+                    "Content-Type",
+                    "Idempotency-Key",
+                ],
             }
         },
     )
@@ -103,8 +109,10 @@ def create_app(test_config=None):
     def token_in_blocklist(jwt_header, jwt_payload):
         if db.session.get(RevokedToken, jwt_payload["jti"]) is not None:
             return True
-        if app.config.get("REQUIRE_TWO_FACTOR"):
+        if current_app.config.get("REQUIRE_TWO_FACTOR"):
             if jwt_payload.get("mfa_verified") is not True:
+                return True
+            if jwt_payload.get("auth_factors") != ["email_otp", "totp"]:
                 return True
             return db.session.get(User, jwt_payload.get("sub")) is None
         return False

@@ -112,8 +112,17 @@ async function authRequest(
 export async function registerUser(values) {
   const data = await authRequest("/register", values);
 
-  if (!data.user) {
-    throw new Error("Registration response did not include the created user.");
+  if (data.access_token || data.refresh_token) {
+    throw new Error("Registration must complete email and authenticator verification first.");
+  }
+  if (
+    !data.user ||
+    !data.mfa_required ||
+    data.factor_step !== "email_otp" ||
+    data.flow !== "registration" ||
+    !data.challenge_token
+  ) {
+    throw new Error("Registration response did not include an account setup challenge.");
   }
   return data;
 }
@@ -122,11 +131,14 @@ export async function loginUser(values) {
   const data = await authRequest("/login", values);
 
   if (data.access_token && data.refresh_token) {
-    saveTokens(data.access_token, data.refresh_token);
-    return data;
+    throw new Error("Login must complete email and authenticator verification first.");
   }
-  if (!data.mfa_required && !data.mfa_setup_required) {
-    throw new Error("Login response did not include authentication tokens.");
+  if (
+    !data.mfa_required ||
+    data.factor_step !== "email_otp" ||
+    !data.challenge_token
+  ) {
+    throw new Error("Login response did not include an authentication challenge.");
   }
   return data;
 }
@@ -137,11 +149,12 @@ export async function loginWithGoogle(credential, role) {
     ...(role ? { role } : {}),
   });
   if (data.access_token && data.refresh_token) {
-    saveTokens(data.access_token, data.refresh_token);
+    throw new Error("Google sign-in must complete email and authenticator verification first.");
   } else if (
     !data.role_required &&
-    !data.mfa_required &&
-    !data.mfa_setup_required
+    (!data.mfa_required ||
+      data.factor_step !== "email_otp" ||
+      !data.challenge_token)
   ) {
     throw new Error("Google sign-in response did not include authentication details.");
   }
@@ -159,8 +172,12 @@ export function beginGitHubLogin() {
 export async function loginWithGitHub(code, state, role) {
   const data = await authRequest("/github-login", { code, state, role });
   if (data.access_token && data.refresh_token) {
-    saveTokens(data.access_token, data.refresh_token);
-  } else if (!data.mfa_required && !data.mfa_setup_required) {
+    throw new Error("GitHub sign-in must complete email and authenticator verification first.");
+  } else if (
+    !data.mfa_required ||
+    data.factor_step !== "email_otp" ||
+    !data.challenge_token
+  ) {
     throw new Error("GitHub sign-in response did not include authentication details.");
   }
   return data;
@@ -196,10 +213,14 @@ export async function verifyLoginFactorCode(challengeToken, method, code) {
     method,
     code,
   });
-  if (!data.access_token || !data.refresh_token) {
-    throw new Error("Verification did not return an authenticated session.");
+  if (
+    data.access_token ||
+    data.refresh_token ||
+    !data.challenge_token ||
+    !["authenticator_totp", "authenticator_enrollment"].includes(data.factor_step)
+  ) {
+    throw new Error("Email verification did not advance to the authenticator step.");
   }
-  saveTokens(data.access_token, data.refresh_token);
   return data;
 }
 
@@ -208,10 +229,15 @@ export async function verifyRecoveryCode(challengeToken, code) {
     challenge_token: challengeToken,
     code,
   });
-  if (!data.access_token || !data.refresh_token) {
-    throw new Error("Recovery verification did not return an authenticated session.");
+  if (
+    data.access_token ||
+    data.refresh_token ||
+    data.recovery_required !== true ||
+    data.factor_step !== "authenticator_enrollment" ||
+    !data.challenge_token
+  ) {
+    throw new Error("Recovery must be followed by authenticator enrollment.");
   }
-  saveTokens(data.access_token, data.refresh_token);
   return data;
 }
 

@@ -1,7 +1,6 @@
 import os
 from datetime import date, timedelta
 
-os.environ["DATABASE_URL"] = "sqlite:///:memory:"
 os.environ["JWT_SECRET_KEY"] = "test-secret-key-for-tests-only-0123456789"
 os.environ["TENANT_PII_ENCRYPTION_KEY"] = (
     "MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA="
@@ -13,25 +12,33 @@ from server import create_app
 from server.extensions import db
 from server.models import User
 from server.models_tenant import Tenant, TenantProfile
+from tests.db_safety import TEST_DATABASE_URI, assert_isolated_test_database
 
 
 @pytest.fixture
-def client():
+def client(monkeypatch):
+    from server.routes import auth
+
+    monkeypatch.setattr(auth, "deliver_email_outbox_event", lambda _event_key: True)
     app = create_app({
         "TESTING": True,
-        "SQLALCHEMY_DATABASE_URI": "sqlite:///:memory:",
+        "SQLALCHEMY_DATABASE_URI": TEST_DATABASE_URI,
         "JWT_SECRET_KEY": "test-secret-key-for-tests-only-0123456789",
         "REQUIRE_TWO_FACTOR": False,
         "TOTP_ENCRYPTION_KEY": None,
-        "SMTP_HOST": None,
-        "SMTP_FROM_ADDRESS": None,
+        "SMTP_HOST": "smtp.example.com",
+        "SMTP_FROM_ADDRESS": "test@example.com",
+        "SMTP_USERNAME": None,
+        "SMTP_PASSWORD": None,
         "MAIL_SUPPRESS_SEND": False,
         "TENANT_PII_ENCRYPTION_KEY": (
             "MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA="
         ),
     })
     with app.app_context():
+        assert_isolated_test_database(app)
         db.drop_all()
+        assert_isolated_test_database(app)
         db.create_all()
         yield app.test_client()
         db.session.remove()

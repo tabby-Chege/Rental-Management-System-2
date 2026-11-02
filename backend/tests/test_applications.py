@@ -15,6 +15,7 @@ def create_unit(
     headers,
     name="Application property",
     rent_amount=1200,
+    reservation_hold_hours=48,
 ):
     property_response = client.post(
         "/api/properties",
@@ -24,6 +25,7 @@ def create_unit(
             "address": "1 Main Street",
             "city": "Nairobi",
             "state": "Nairobi",
+            "reservation_hold_hours": reservation_hold_hours,
         },
     )
     assert property_response.status_code == 201
@@ -228,10 +230,14 @@ def test_payment_confirmation_creates_the_lease_after_reservation(client, world)
     )
 
 
-def test_approval_reservation_deadline_is_exactly_one_hour(client, world, monkeypatch):
+def test_approval_reservation_deadline_uses_property_configuration(
+    client, world, monkeypatch
+):
     fixed_now = datetime(2026, 10, 21, 12, 0, tzinfo=timezone.utc)
     monkeypatch.setattr("server.routes.applications.utc_now", lambda: fixed_now)
-    unit_id = create_unit(client, world["landlord"])
+    unit_id = create_unit(
+        client, world["landlord"], reservation_hold_hours=6
+    )
     application = apply(client, world["tenant"], unit_id).get_json()["application"]
 
     approval = client.patch(
@@ -243,7 +249,7 @@ def test_approval_reservation_deadline_is_exactly_one_hour(client, world, monkey
     assert approval.status_code == 200
     assert datetime.fromisoformat(
         approval.get_json()["application"]["payment_due_at"]
-    ) == fixed_now + timedelta(hours=1)
+    ) == fixed_now + timedelta(hours=6)
 
 
 def test_database_rejects_simultaneous_active_reservations_for_one_unit(
@@ -308,7 +314,9 @@ def test_tenant_cannot_decide_application_and_decline_does_not_create_tenant(
 def test_waitlist_offer_deadline_notifications_and_expiry(
     client, world, monkeypatch
 ):
-    unit_id = create_unit(client, world["landlord"])
+    unit_id = create_unit(
+        client, world["landlord"], reservation_hold_hours=6
+    )
     first = apply(client, world["tenant"], unit_id).get_json()["application"]
     second = apply(client, world["tenant2"], unit_id).get_json()["application"]
     assert second["status"] == "pending"
@@ -342,7 +350,7 @@ def test_waitlist_offer_deadline_notifications_and_expiry(
     ][0]
     assert offered["status"] == "offered"
     assert datetime.fromisoformat(offered["payment_due_at"]) == (
-        fixed_now + timedelta(hours=1)
+        fixed_now + timedelta(hours=6)
     )
 
     with client.application.app_context():

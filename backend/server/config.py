@@ -11,6 +11,9 @@ class Config:
     def load(cls):
         jwt_secret = os.getenv("JWT_SECRET_KEY")
         s3_bucket = os.getenv("S3_BUCKET")
+        email_otp_ttl_seconds = int(os.getenv("EMAIL_OTP_TTL_SECONDS", "300"))
+        if not 60 <= email_otp_ttl_seconds <= 600:
+            raise ValueError("EMAIL_OTP_TTL_SECONDS must be between 60 and 600")
         frontend_base_url = os.getenv(
             "FRONTEND_BASE_URL", "http://localhost:5173"
         ).rstrip("/")
@@ -21,6 +24,7 @@ class Config:
             "SQLALCHEMY_TRACK_MODIFICATIONS": False,
             "JWT_SECRET_KEY": jwt_secret,
             "SECRET_KEY": jwt_secret,
+            "JWT_DECODE_LEEWAY": timedelta(seconds=5),
             "JWT_ACCESS_TOKEN_EXPIRES": timedelta(minutes=15),
             "JWT_REFRESH_TOKEN_EXPIRES": timedelta(days=30),
             "LOGIN_MAX_ATTEMPTS": 5,
@@ -85,6 +89,7 @@ class Config:
             "PESAPAL_CALLBACK_URL": os.getenv("PESAPAL_CALLBACK_URL"),
             "PESAPAL_IPN_ID": os.getenv("PESAPAL_IPN_ID"),
             "SMTP_HOST": os.getenv("SMTP_HOST"),
+            "EMAIL_OTP_TTL_SECONDS": email_otp_ttl_seconds,
             "SMTP_PORT": int(os.getenv("SMTP_PORT", "587")),
             "SMTP_USERNAME": os.getenv("SMTP_USERNAME"),
             "SMTP_PASSWORD": os.getenv("SMTP_PASSWORD"),

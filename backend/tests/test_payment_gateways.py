@@ -279,7 +279,7 @@ def test_payment_after_reservation_expiry_is_refunded_and_promotes_waitlist(
         assert expired.lease_id is None
         assert promoted.status == "offered"
         assert promoted.payment_due_at.replace(tzinfo=timezone.utc) == (
-            fixed_now + timedelta(hours=1)
+            fixed_now + timedelta(hours=48)
         )
         assert Lease.query.filter_by(unit_id=unit_id).count() == 0
         assert Payment.query.filter_by(payment_type="reservation").count() == 0

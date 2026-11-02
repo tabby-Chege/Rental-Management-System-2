@@ -134,13 +134,18 @@ function PropertyDetailsPage() {
       const selectedUnit = units.find(
         (unit) => String(unit.id) === params.get("unit_id"),
       );
-      if (selectedUnit) {
-        setApplicationStep(1);
-        setApplicationUnit(selectedUnit);
-      } else {
-        setApplicationError("That unit is no longer available. Please choose another.");
-      }
-      navigate(`${location.pathname}${location.hash}`, { replace: true });
+      const frame = window.requestAnimationFrame(() => {
+        if (selectedUnit) {
+          setApplicationStep(1);
+          setApplicationUnit(selectedUnit);
+        } else {
+          setApplicationError(
+            "That unit is no longer available. Please choose another.",
+          );
+        }
+        navigate(`${location.pathname}${location.hash}`, { replace: true });
+      });
+      return () => window.cancelAnimationFrame(frame);
     }
   }, [property, user, units, location.search, location.pathname, location.hash, navigate]);
 

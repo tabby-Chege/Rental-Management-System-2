@@ -1,10 +1,16 @@
 # Rental Management System
-Property Finder is a full-stack rental portfolio manager built by extending a Phase 1 React application. Landlords can create an account, manage their own properties, search their portfolio, and use related unit, lease, and payment records. Tenants maintain their own profiles and apply for units; landlord-scoped tenant records are created through application approval rather than manual entry. The React client communicates with a custom Flask REST API; PostgreSQL stores persistent data through SQLAlchemy. The app does not verify rental availability or process real payments.
+Property Finder is a full-stack rental management application built by extending a Phase 1 React application. Landlords manage properties, units, tenants, applications, leases, payments, and maintenance records. Tenants maintain profiles, search available units, apply, message landlords, and track reservations and payments. The React client communicates with a Flask REST API; PostgreSQL stores persistent data through SQLAlchemy. Availability is derived from leases and reservations. Payment providers default to sandbox and require explicit provider credentials for live transactions; bank transfers are confirmed by the landlord.
 
 ## Features
 
 - Register and log in with JWT-based authentication.
-- Create, view, update, and delete property and unit records; tenant records are linked through application approval.
+- Create, view, update, and delete owned properties and units; tenants apply with a saved profile and landlord approval links their account to a tenant record.
+- Review, approve, or decline applications with a recorded decision reason; configured reservation holds default to 48 hours and can be set per property from 1 to 720 hours.
+- Calculate availability from active leases and reservations, expire reservations on the backend, promote waitlisted applicants, and send status notifications.
+- Upload and manage property and unit photos; tenant identity documents are private and access-controlled.
+- Message property owners, manage lease documents and maintenance requests, and view role-specific dashboards.
+- Verify sandbox/provider payments or confirm bank transfers, create leases after successful reservation payment, and maintain payment receipts and rent ledgers.
+- Protect accounts with mandatory email one-time codes followed by authenticator-app TOTP, refresh-token rotation, lockout controls, and recovery codes. Email OTP and TOTP are both required for password and social sign-in.
 - Store each property's ISO currency, country, region, city, address, postal code, and IANA time zone; format rent and payments in the property's currency.
 - Store tenant phone numbers in international E.164 format.
 - Create and view leases, update their terms or status, and end them without losing lease history.
@@ -16,14 +22,14 @@ Property Finder is a full-stack rental portfolio manager built by extending a Ph
 
 ## Technology
 
-- **Frontend:** React 19, Vite, React Router, JavaScript, CSS
+- **Frontend:** React 19, Vite, React Router, JavaScript, CSS, Playwright
 - **Backend:** Python 3.12+, Flask, Flask-JWT-Extended, Flask-SQLAlchemy, SQLAlchemy
 - **Database:** PostgreSQL (SQLite in automated backend tests)
 - **Database driver:** psycopg2
 
 ## Requirements
 
-- Node.js 20.19+ and npm
+- Node.js 20.19+ or 22.12+ and npm
 - Python 3.12+ and pip
 - PostgreSQL 14+ (or a compatible hosted PostgreSQL database)
 
@@ -70,15 +76,35 @@ python run.py
 
 The API listens on `http://localhost:5000`. The server refuses to start unless `DATABASE_URL` (or `SQLALCHEMY_DATABASE_URI`) and a random `JWT_SECRET_KEY` of at least 32 characters are configured. `CORS_ORIGINS` is a comma-separated allowlist; replace the local development origins with the exact frontend origin(s) when deploying.
 
-New accounts must use a password of at least 10 characters containing uppercase and lowercase letters, a number, and a symbol; passwords are limited to 72 UTF-8 bytes for bcrypt compatibility. Login is temporarily blocked for 15 minutes after five failed attempts in a 15-minute window. Access tokens expire after 15 minutes and refresh tokens rotate on use, expiring after 30 days.
+Two-step authentication is mandatory. Configure a working SMTP provider in `backend/.env` before starting the API:
 
-For a new database, apply the Alembic schema from the `backend` directory:
-
-```sh
-flask --app run.py db upgrade
+```env
+SMTP_HOST=your-provider-host
+SMTP_PORT=587
+SMTP_USERNAME=your-provider-username
+SMTP_PASSWORD=your-provider-password
+SMTP_FROM_ADDRESS=your-verified-sender
+SMTP_USE_TLS=true
+EMAIL_OTP_TTL_SECONDS=300
+MAIL_SUPPRESS_SEND=false
 ```
 
-This applies the checked-in Flask-Migrate/Alembic revision; the application no longer creates schema tables on startup. For an existing database already upgraded with the historical SQL files in `backend/migrations/`, verify that its schema includes all current fields and then baseline it once with `flask --app run.py db stamp head`. Do not stamp an older schema: back it up, apply the required historical SQL migrations, verify the result, and only then stamp. Keep credentials out of source control.
+Obtain SMTP values from your provider and keep them only in local environment configuration or a deployment secret store. The email code expires after five minutes by default; `EMAIL_OTP_TTL_SECONDS` accepts a value from 60 to 600 seconds. A password login first sends a short-lived email code; after verification, users must enroll an authenticator app or submit its current code. New accounts and existing accounts whose email has not been verified must prove access to their registered email. The API does not issue access or refresh tokens until both verification steps have succeeded. If email delivery is unavailable, sign-in fails closed.
+
+New accounts must use a password of at least 10 characters containing uppercase and lowercase letters, a number, and a symbol; passwords are limited to 72 UTF-8 bytes for bcrypt compatibility. Login is temporarily blocked for 15 minutes after five failed attempts in a 15-minute window. Access tokens expire after 15 minutes and refresh tokens rotate on use, expiring after 30 days.
+
+Database changes use the explicit, safety-gated migration profiles documented in
+[backend/migrations/profiles/README.md](./backend/migrations/profiles/README.md).
+Do not run `flask db upgrade`, `flask db stamp`, direct `alembic upgrade`, or
+commands targeting all migration heads. Stage 1 has created the runner and
+profile structure only; fresh and legacy profiles intentionally have no
+migrations yet.
+
+Never target the original `rental_management` database. For approved work,
+select exactly one profile and confirm the exact name of a uniquely named
+disposable PostgreSQL database through `backend/migration_runner.py`. The
+runner reads the connection URL from the backend environment, verifies the
+database identity read-only, and refuses protected or ambiguous targets.
 
 For a local development secret, generate a value with `python -c "import secrets; print(secrets.token_urlsafe(48))"` and set it only in `backend/.env`.
 
@@ -103,7 +129,6 @@ From `backend/`, set a local database and development-only credentials, then run
 export DATABASE_URL=sqlite:////tmp/rental-demo.db
 export JWT_SECRET_KEY=replace-with-a-random-local-secret-of-at-least-32-characters
 export CORS_ORIGINS=http://localhost:5173
-export REQUIRE_TWO_FACTOR=false
 export APP_ENV=development
 export ENABLE_DEMO_DATA=true
 export DEMO_LANDLORD_PASSWORD=replace-with-a-strong-development-only-password
@@ -111,11 +136,11 @@ flask --app run.py db upgrade
 python scripts/seed_demo_properties.py --confirm-development-data
 ```
 
-The demo account email defaults to `demo-landlord@example.test` and can be changed with `DEMO_LANDLORD_EMAIL`. Sample listings are labeled as fictional and are not intended for real rentals. Do not use demo credentials or seed data in production.
+The demo account email defaults to `demo-landlord@example.test` and can be changed with `DEMO_LANDLORD_EMAIL`. Sign-in still requires both email OTP and authenticator enrollment, so configure SMTP before using the demo account. Sample listings are labeled as fictional and are not intended for real rentals. Do not use demo credentials or seed data in production.
 
 ### Browser end-to-end tests
 
-Install the frontend and backend dependencies, install Chromium with `npx playwright install chromium`, then run `npm run test:e2e`. The test runner starts a temporary file-backed SQLite API and the Vite app; it exercises landlord listing creation, tenant contact without a profile, sign-in return to a selected unit, profile/document reuse, application submission and approval, multiple photos, and validation failures. Set `PLAYWRIGHT_PYTHON` if the Python interpreter is not at `backend/.venv/bin/python`.
+Install the frontend and backend dependencies, install Chromium with `npx playwright install chromium`, then run `npm run test:e2e`. On Linux/WSL, install Chromium's system libraries with `npx playwright install-deps chromium` (this requires system package-install permissions). The test runner starts an API backed by a temporary file-backed SQLite database and the Vite app; it exercises listing creation and photos, tenant contact and profile completion, application review, configurable reservation deadlines, bank-transfer checkout and verification, unit occupancy, duplicate registration, recoverable account errors, and mobile navigation. Set `PLAYWRIGHT_PYTHON` if the Python interpreter is not at `backend/.venv/bin/python`.
 
 ## API Overview
 
@@ -132,9 +157,10 @@ All API responses are JSON. Protected routes require `Authorization: Bearer <acc
 | **Properties** | `GET/POST /api/properties`; `GET/PUT/DELETE /api/properties/<id>`; portfolio counts at `GET /api/properties/summary` | Authenticated users; results and changes are limited to owned records, except admins. Property responses include computed total, occupied, reserved, and vacant unit counts. |
 | **Tenants** | `GET /api/tenants`; `GET/PUT/DELETE /api/tenants/<id>` | Landlords manage tenant records linked through applications or leases; linked tenants may view their own record and update permitted contact fields. Manual tenant creation is disabled. |
 | **Units** | `GET/POST /api/units`; `GET/PUT/DELETE /api/units/<id>`; `GET/POST /api/properties/<property_id>/units`; bulk create at `POST /api/properties/<property_id>/units/bulk`; `GET/POST /api/units/<unit_id>/rooms`; `PUT/DELETE /api/rooms/<room_id>`; public search at `GET /api/units/public` | Owning landlord or admin manage units and rooms; public search returns vacant units by default and supports location, bedrooms, bathrooms, rent range, unit type, availability, and pagination. Status is computed from active lease dates and approved applications. |
-| **Applications** | `GET/POST /api/applications`; `GET/PATCH /api/applications/<id>`; `PATCH /api/applications/<id>/lease-terms`; `POST /api/applications/<id>/confirm-payment` | Tenants submit and view their applications; landlords review applications for owned units, set decisions with a reason, set lease terms, and confirm payment. Approval links the applicant to a tenant record and starts a fixed one-hour reservation. Confirming payment records the payment and creates the lease. |
+| **Applications** | `GET/POST /api/applications`; `GET/PATCH /api/applications/<id>`; `PATCH /api/applications/<id>/lease-terms`; `POST /api/applications/<id>/confirm-payment` | Tenants submit and view their applications; landlords review applications for owned units, set decisions with a reason, set lease terms, and confirm verified payments. Approval links the applicant to a tenant record and starts a property-configured reservation (48-hour default, 1–720 hours). Confirmed payment creates the lease. |
 | **Leases** | `GET/POST /api/leases`; `GET/PUT/DELETE /api/leases/<id>`; tenant views at `/api/leases/mine` and `/api/leases/mine/payments` | Owning landlord or admin; tenants can view only their linked leases and payments; deleting a lease ends it to preserve history. |
-| **Payments** | `GET /api/payments` (also `/payments`); `POST /payments` | Landlords see payments for their properties; tenants see payments linked to their own lease. History includes tenant, property, and unit labels but no account credentials. |
+| **Payments** | `GET/POST /api/payments`; `GET /api/payments/providers`; `POST /api/payments/checkout`; `GET /api/payments/attempts`; `GET /api/payments/attempts/<id>`; `POST /api/payments/attempts/<id>/confirm`; provider webhooks at `/api/payments/webhooks/<provider>` | Tenants create checkout attempts for their own applications or leases; landlords can record manual lease payments and verify bank transfers for their properties. Payment history is role-scoped and includes receipts and associated rental records. |
+| **Rent and deposits** | `GET /api/payments/invoices`; `GET /api/payments/deposits`; `POST /api/payments/deposits` | Tenants see invoices and deposit ledgers for their leases; landlords see records for their properties and can record deposit charges or refunds within the verified balance. |
 | **Notifications** | `GET /api/notifications`; `PATCH /api/notifications/<id>/read` | Tenants view and mark their own reservation and lease notifications as read. |
 
 Collection endpoints for properties, tenants, units, applications, leases, and payments support `page` and `per_page`, defaulting to page 1 and 10 records per page (maximum 100). For example: `GET /api/properties?page=2&per_page=10&q=Oak&city=Nairobi`. Paginated responses include the resource list and metadata (`page`, `per_page`, `total`, `pages`, `has_next`, and `has_prev`). Invalid pagination parameters return HTTP 400. Validation, authorization, missing records, and conflicts return `{"error": "..."}` and an appropriate HTTP status. Unhandled server failures are logged and return a generic JSON error without exposing internals.
@@ -143,7 +169,7 @@ Property create/update requests use `address_line`, `country` (ISO 3166-1 alpha-
 
 Properties use `rental_type` (`multi_unit` or `whole_property`), a supported `subtype`, and a positive `floors` count. A whole-property create request must include a `whole_unit` object with `bedrooms`, `bathrooms`, and `rent_amount`; the API creates the sole unit as `Entire property`, and its rent/layout/details are updated through `whole_unit` in property updates. Multi-unit property requests create and manage units through the unit endpoints. Unit records support `floor_number`, `layout` (`studio` or a bedroom-plus-living-room value such as `2+1`), `size`, `size_unit` (`sqm` or `sqft`), and `furnished`. A unit can have up to 30 room records, with room type, optional size/unit, and description. Floor numbers cannot exceed the property's floor count; a property's floor count cannot be reduced below an existing unit's floor.
 
-Property responses include an `occupancy_summary` with `total_units`, `occupied_units`, `reserved_units`, and `vacant_units`; `GET /api/properties/summary` returns portfolio-wide counts for the authenticated manager. An active lease makes a unit occupied; otherwise an active approved or offered application makes it reserved, and a unit with neither is vacant. Every approved application and waitlist offer has a fixed one-hour payment deadline; this duration cannot be configured or extended per property. Additional applications for a reserved unit join a FIFO waitlist. If payment is not confirmed before the deadline, the reservation expires and the next eligible applicant is offered the unit with a fresh one-hour deadline. Tenants receive in-app deadline reminders and status notifications. Payment confirmation is a manual landlord action, records a completed payment, and creates the lease with the supplied end date. Bulk unit creation accepts `units_per_floor`, `layout`, and `rent_amount`; it creates all floors atomically, numbering the first five units on floors 1 and 2 as `101`–`105` and `201`–`205`. The request is capped at 500 units and does not overwrite existing units.
+Property responses include an `occupancy_summary` with `total_units`, `occupied_units`, `reserved_units`, and `vacant_units`; `GET /api/properties/summary` returns portfolio-wide counts for the authenticated manager. An active lease makes a unit occupied; otherwise an active approved or offered application makes it reserved, and a unit with neither is vacant. The landlord configures each property's payment hold from 1 to 720 hours; new properties default to 48 hours. The same setting applies to waitlist offers. Additional applications for a reserved unit join a FIFO waitlist. If payment is not verified before the server-generated deadline, the reservation expires and the next eligible applicant receives a new hold. Client countdowns display the server deadline but do not expire reservations. Tenants receive deadline reminders and status notifications. Reservation payment can be verified through a configured provider or confirmed by the landlord after a manual payment is received. Successful confirmation creates the lease; failed or late payments do not occupy the unit. Bulk unit creation accepts `units_per_floor`, `layout`, and `rent_amount`; it creates all floors atomically, numbering the first five units on floors 1 and 2 as `101`–`105` and `201`–`205`. The request is capped at 500 units and does not overwrite existing units.
 
 Public rental search uses individual unit records, not property-level rent or bedroom estimates. For example, `GET /api/units/public?location=Nairobi&bedrooms=2&min_rent=10000&max_rent=20000&unit_type=two-bedroom&availability=vacant` returns matching unit details with the parent property location. `availability` accepts `vacant`, `reserved`, `occupied`, or `all` and defaults to `vacant`. Tenants may apply to vacant units or join a reserved unit's waitlist; applications to actively occupied units are rejected.
 
@@ -196,6 +222,8 @@ src/
 
 - Store `.env` files locally only; `.gitignore` excludes them. Use a unique, high-entropy `JWT_SECRET_KEY`.
 - Public registration creates landlord accounts; role changes and admin provisioning must be performed through a trusted administrative process.
-- Lease termination preserves records and payment history; it does not represent a legal lease workflow or send tenant notices.
-- Payment records are tracking data only; the app does not connect to a payment provider or move money.
-- No deployment is configured. Use HTTPS, managed secrets, database migrations, and a production WSGI server before hosting publicly.
+- Tenant documents and messages are access-controlled; use private object storage and a separately managed PII encryption key in deployments.
+- Reservation deadlines are enforced by the API and scheduled reservation processor, not by the browser countdown. Production must schedule the documented processor command.
+- Payment integrations default to sandbox. Live processing requires correct provider credentials, webhook configuration, HTTPS, and provider-side setup; bank-transfer confirmation is a landlord verification action, not an automatic bank integration.
+- Lease termination preserves records and payment history; it does not provide legal advice or send formal legal notices.
+- No production deployment is configured. Use HTTPS, managed secrets, reviewed database migrations, backups, and a production WSGI server before hosting publicly.

@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import {
   beginPasskeyRegistration,
   completePasskeyRegistration,
   generateRecoveryCodes,
   getFactorMethods,
+  logoutUser,
   removePasskey,
   requestPhoneVerification,
   verifyPhoneNumber,
@@ -12,6 +14,7 @@ import { prepareCreationOptions, serializeCredential } from "../utils/webauthn";
 import "./SecuritySettingsPage.css";
 
 function SecuritySettingsPage() {
+  const navigate = useNavigate();
   const [settings, setSettings] = useState(null);
   const [phone, setPhone] = useState("");
   const [phoneCode, setPhoneCode] = useState("");
@@ -144,6 +147,26 @@ function SecuritySettingsPage() {
     }
   }
 
+  async function handleAuthenticatorSetup() {
+    setError("");
+    setLoading(true);
+    try {
+      await logoutUser();
+      navigate("/login", { replace: true });
+    } catch (requestError) {
+      setError(requestError.message || "Could not safely end the current session.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  const supplementaryMethods = (settings?.methods || []).filter(
+    (method) => !["email", "totp"].includes(method.id),
+  );
+  const authenticatorEnabled = settings?.methods.some(
+    (method) => method.id === "totp",
+  );
+
   return (
     <section className="security-settings-page">
       <header className="security-hero">
@@ -154,9 +177,7 @@ function SecuritySettingsPage() {
           <div className="security-hero-badge">
             <span aria-hidden="true">✓</span>
             {settings
-              ? settings.two_factor_required
-                ? "Two-step verification is required"
-                : "Two-step verification is optional"
+              ? "Two-step verification is required"
               : "Loading verification policy…"}
           </div>
         </div>
@@ -184,29 +205,64 @@ function SecuritySettingsPage() {
         <p className="security-load-state" role="status">Loading your security settings…</p>
       ) : (
         <>
-          <section className="security-methods-card" aria-label="Configured sign-in methods">
+          <section className="security-methods-card" aria-label="Required sign-in factors">
             <div className="security-section-heading">
               <div>
-                <span className="security-eyebrow">YOUR SIGN-IN</span>
-                <h2>Available verification methods</h2>
+                <span className="security-eyebrow">REQUIRED AT EVERY SIGN-IN</span>
+                <h2>Email OTP, then authenticator TOTP</h2>
               </div>
-              <span className="security-method-count">{settings.methods.length} active</span>
-            </div>
-            <div className="security-method-list">
-              {settings.methods.map((method) => (
-                <div className="security-method-chip" key={method.id}>
-                  <span className={`security-method-icon is-${method.id}`} aria-hidden="true">
-                    {method.id === "totp" ? "01" : method.id === "sms" ? "SMS" : method.id === "passkey" ? "PK" : method.id === "recovery" ? "RC" : "@"}
-                  </span>
-                  <span>{method.label}</span>
-                  <span className="security-method-check" aria-label="Active">✓</span>
-                </div>
-              ))}
+              <span className="security-method-count">Both required</span>
             </div>
             <p className="security-card-note">
-              {settings.two_factor_required
-                ? "Two-step verification is required for this server. Use any active method listed above; configure a recovery method if available."
-                : "Two-step verification is optional for this server. Add an available verification method to strengthen your account."}
+              Email verification must succeed before the authenticator code is
+              accepted. SMS, passkeys, and recovery codes do not replace either
+              required factor, and this policy cannot be disabled.
+            </p>
+            <p className="security-inline-note">
+              Authenticator app: {authenticatorEnabled ? "enrolled" : "setup required"}.
+              Setup is completed during sign-in after email verification. If
+              you lose access to the app, use an unused recovery code during
+              sign-in to enroll a replacement. Recovery never grants access
+              by itself.
+            </p>
+            <button
+              className="security-button is-secondary"
+              type="button"
+              onClick={handleAuthenticatorSetup}
+              disabled={loading}
+            >
+              {loading ? "Signing out…" : "Sign out and continue required sign-in"}
+            </button>
+          </section>
+
+          <section className="security-methods-card" aria-label="Supplementary security options">
+            <div className="security-section-heading">
+              <div>
+                <span className="security-eyebrow">SUPPLEMENTARY OPTIONS</span>
+                <h2>Additional account safeguards</h2>
+              </div>
+              <span className="security-method-count">
+                {supplementaryMethods.length} active
+              </span>
+            </div>
+            {supplementaryMethods.length > 0 ? (
+              <div className="security-method-list">
+                {supplementaryMethods.map((method) => (
+                  <div className="security-method-chip" key={method.id}>
+                    <span className={`security-method-icon is-${method.id}`} aria-hidden="true">
+                      {method.id === "sms" ? "SMS" : method.id === "passkey" ? "PK" : "RC"}
+                    </span>
+                    <span>{method.label}</span>
+                    <span className="security-method-check" aria-label="Active">✓</span>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="security-inline-note">No supplementary methods are configured.</p>
+            )}
+            <p className="security-card-note">
+              These options are for additional account protection or recovery;
+              none grants access without both required factors.
             </p>
           </section>
 
@@ -224,7 +280,7 @@ function SecuritySettingsPage() {
                   <p>
                     {settings.phone_verified
                       ? `Verified phone: ${settings.phone}`
-                      : "Verify your phone number to use it for one-time sign-in codes."}
+                      : "Verify your phone number for supplementary security. It cannot replace email OTP or authenticator TOTP."}
                   </p>
                   {!phoneChallenge ? (
                     <form onSubmit={handlePhoneRequest}>
@@ -275,8 +331,8 @@ function SecuritySettingsPage() {
                   <strong>SMS isn’t set up on this server yet</strong>
                   <p>
                     Phone verification is unavailable until the administrator
-                    configures Twilio credentials: account SID, auth token, and
-                    sender number. Your other security methods remain available.
+                    configures Twilio credentials. SMS is supplementary and
+                    cannot replace the required email OTP and authenticator app.
                   </p>
                 </div>
               )}
@@ -290,7 +346,13 @@ function SecuritySettingsPage() {
                   <h2>Passkeys</h2>
                 </div>
               </div>
-              <p>Use your device screen lock, fingerprint, or a hardware security key to sign in.</p>
+              <p>
+                Register a device credential as an additional security option.
+              </p>
+              <p className="security-inline-note">
+                Passkeys do not currently provide sign-in and cannot replace
+                email OTP or authenticator TOTP.
+              </p>
               {settings.passkeys.length > 0 ? (
                 <div className="security-passkey-list">
                   {settings.passkeys.map((passkey) => (
@@ -334,7 +396,9 @@ function SecuritySettingsPage() {
               </div>
               <p>
                 <strong>{settings.recovery_codes_remaining} unused</strong> · Each code works once.
-                Generating a new set invalidates all previous codes.
+                Generating a new set invalidates all previous codes. During
+                sign-in, a recovery code can replace TOTP once and requires
+                authenticator enrollment before access is restored.
               </p>
               <button className="security-button is-secondary" type="button" onClick={handleGenerateRecoveryCodes} disabled={loading}>
                 {loading ? "Generating…" : "Generate new recovery codes"}

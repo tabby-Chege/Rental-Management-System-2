@@ -629,9 +629,12 @@ def process_pending_payment_attempts(limit=100):
     return counts
 
 
-def process_email_outbox(limit=50):
+def process_email_outbox(limit=50, event_key=None):
+    query = EmailOutbox.query.filter_by(status="pending")
+    if event_key is not None:
+        query = query.filter_by(event_key=event_key)
     messages = (
-        EmailOutbox.query.filter_by(status="pending")
+        query
         .order_by(EmailOutbox.created_at, EmailOutbox.id)
         .limit(limit)
         .with_for_update()
@@ -675,7 +678,7 @@ def process_email_outbox(limit=50):
                 client.send_message(email)
         except (smtplib.SMTPException, OSError) as error:
             record.attempts += 1
-            record.last_error = str(error)[:500]
+            record.last_error = type(error).__name__
             failed += 1
             continue
         record.status = "sent"
@@ -687,3 +690,8 @@ def process_email_outbox(limit=50):
         sent += 1
     db.session.commit()
     return {"sent": sent, "failed": failed}
+
+
+def deliver_email_outbox_event(event_key):
+    result = process_email_outbox(limit=1, event_key=event_key)
+    return result["sent"] == 1

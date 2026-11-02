@@ -181,6 +181,7 @@ class Property(db.Model):
             "rental_type": self.rental_type,
             "subtype": self.subtype,
             "floors": self.floors,
+            "reservation_hold_hours": self.reservation_hold_hours,
             "photos": [
                 photo.to_dict()
                 for photo in sorted(self.photos, key=lambda item: (not item.is_cover, item.id))
