@@ -49,7 +49,8 @@ from server.models_auth_factors import (
     PasskeyCredential,
     RecoveryCode,
 )
-from server.payment_service import queue_email
+from server.models_payment import EmailOutbox
+from server.payment_service import deliver_email_outbox_event, queue_email
 
 
 auth_bp = Blueprint("auth", __name__, url_prefix="/api/auth")
@@ -58,10 +59,10 @@ PASSWORD_MIN_LENGTH = 10
 PASSWORD_MAX_BYTES = 72
 LOGIN_ERROR = "Invalid email or password"
 FACTOR_CHALLENGE_MAX_AGE_SECONDS = 600
-OTP_CHALLENGE_MAX_AGE_SECONDS = 300
 OTP_MAX_ATTEMPTS = 5
 OTP_RESEND_SECONDS = 30
 OTP_MAX_PER_HOUR = 5
+REQUIRED_AUTH_FACTORS = ["email_otp", "totp"]
 
 
 def factor_serializer():
@@ -89,7 +90,6 @@ def create_factor_challenge(user, purpose):
             created_at=now,
         )
     )
-    db.session.commit()
     return token
 
 
@@ -181,32 +181,55 @@ def authenticate_with_totp(user, code):
 
 
 def authentication_response(user, mfa_verified=False):
+    claims: dict[str, bool | list[str]] = {"mfa_verified": mfa_verified}
+    if mfa_verified:
+        claims["auth_factors"] = REQUIRED_AUTH_FACTORS
     return {
         "user": user.to_dict(),
         "access_token": create_access_token(
             identity=str(user.id),
-            additional_claims={"mfa_verified": mfa_verified},
+            additional_claims=claims,
         ),
         "refresh_token": create_refresh_token(
             identity=str(user.id),
-            additional_claims={"mfa_verified": mfa_verified},
+            additional_claims=claims,
         ),
     }
 
 
-def factor_required_response(user):
-    methods = available_factor_methods(user)
-    if methods:
+def factor_required_response(user, purpose="login_email", flow=None):
+    if not email_delivery_configured():
         return {
-            "mfa_required": True,
-            "challenge_token": create_factor_challenge(user, "verify"),
-            "methods": methods,
-            "totp_setup_available": not user.totp_enabled,
-        }
-    return {
-        "mfa_setup_required": True,
-        "challenge_token": create_factor_challenge(user, "setup"),
+            "error": "Email verification is temporarily unavailable. Try again later."
+        }, 503
+
+    challenge_token = create_factor_challenge(user, purpose)
+    _challenge, error = issue_otp(
+        user,
+        "email",
+        challenge_digest(challenge_token),
+        target=user.email,
+    )
+    if error:
+        db.session.rollback()
+        if error.startswith(("Too many", "Please wait")):
+            return {"error": error}, 429
+        return {
+            "error": "Email verification is temporarily unavailable. Try again later."
+        }, 503
+
+    response = {
+        "mfa_required": True,
+        "factor_step": "email_otp",
+        "challenge_token": challenge_token,
+        "email": mask_email(user.email),
+        "expires_in_seconds": current_app.config["EMAIL_OTP_TTL_SECONDS"],
+        "resend_after_seconds": OTP_RESEND_SECONDS,
+        "challenge_expires_in_seconds": FACTOR_CHALLENGE_MAX_AGE_SECONDS,
     }
+    if flow:
+        response["flow"] = flow
+    return response, 200
 
 
 def email_delivery_configured():
@@ -261,20 +284,32 @@ def challenge_digest(value):
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
-def code_digest(user_id, method, code):
+def code_digest(user_id, method, code, challenge_context=None):
     key = current_app.config["SECRET_KEY"].encode("utf-8")
-    value = f"{user_id}:{method}:{code}".encode("utf-8")
+    value = (
+        f"{user_id}:{method}:{code}"
+        if challenge_context is None
+        else f"{user_id}:{method}:{challenge_context}:{code}"
+    ).encode("utf-8")
     return hmac.new(key, value, hashlib.sha256).hexdigest()
 
 
-def get_login_factor_user(data):
-    user = read_factor_challenge(data.get("challenge_token"), "verify")
+def get_login_factor_user(data, purpose):
+    user = read_factor_challenge(data.get("challenge_token"), purpose)
     if not user:
         return None
     now = datetime.now(timezone.utc)
     if user.locked_until and as_utc(user.locked_until) > now:
         return None
     return user
+
+
+def get_email_factor_context(data):
+    for purpose in ("login_email", "register_email"):
+        user = get_login_factor_user(data, purpose)
+        if user:
+            return user, purpose
+    return None, None
 
 
 def prune_expired_auth_challenges(now):
@@ -298,7 +333,14 @@ def create_or_replace_otp(user, method, digest, target=None):
         AuthOtpChallenge.method == method,
         AuthOtpChallenge.created_at >= now - timedelta(hours=1),
     ).order_by(AuthOtpChallenge.created_at.desc()).all()
-    if len(recent) >= OTP_MAX_PER_HOUR:
+    if method == "email":
+        recent_sends = EmailOutbox.query.filter(
+            EmailOutbox.event_key.like(f"mfa-code:{user.id}:%"),
+            EmailOutbox.created_at >= now - timedelta(hours=1),
+        ).count()
+    else:
+        recent_sends = len(recent)
+    if recent_sends >= OTP_MAX_PER_HOUR:
         return None, "Too many verification codes requested. Try again later."
     active = next(
         (
@@ -317,7 +359,9 @@ def create_or_replace_otp(user, method, digest, target=None):
         method=method,
         target=target,
         code_hash="",
-        expires_at=now + timedelta(seconds=OTP_CHALLENGE_MAX_AGE_SECONDS),
+        expires_at=now + timedelta(
+            seconds=current_app.config["EMAIL_OTP_TTL_SECONDS"]
+        ),
         attempts=0,
         created_at=now,
     )
@@ -337,18 +381,54 @@ def create_or_replace_otp(user, method, digest, target=None):
 
 
 def issue_otp(user, method, token_digest, target=None):
-    code = f"{secrets.randbelow(900000) + 100000}"
     challenge, error = create_or_replace_otp(
         user, method, token_digest, target=target
     )
     if error:
         return None, error
-    challenge.code_hash = code_digest(user.id, method, code)
+    active_challenges = AuthOtpChallenge.query.filter(
+        AuthOtpChallenge.user_id == user.id,
+        AuthOtpChallenge.method == method,
+        AuthOtpChallenge.challenge_hash != token_digest,
+        AuthOtpChallenge.consumed_at.is_(None),
+        AuthOtpChallenge.expires_at > datetime.now(timezone.utc),
+        AuthOtpChallenge.attempts < OTP_MAX_ATTEMPTS,
+    ).all()
+    code = None
+    for _ in range(20):
+        candidate = f"{secrets.randbelow(900000) + 100000}"
+        if not any(
+            hmac.compare_digest(
+                active.code_hash,
+                code_digest(
+                    user.id,
+                    method,
+                    candidate,
+                    challenge_context=active.challenge_hash,
+                ),
+            )
+            for active in active_challenges
+        ):
+            code = candidate
+            break
+    if code is None:
+        db.session.rollback()
+        return None, "A verification code could not be generated. Try again later."
+    challenge.code_hash = code_digest(
+        user.id,
+        method,
+        code,
+        challenge_context=token_digest,
+    )
     if method == "email":
+        event_key = (
+            f"mfa-code:{user.id}:{token_digest}:"
+            f"{challenge.created_at.isoformat()}"
+        )
         queue_email(
-            f"mfa-code:{user.id}:{token_digest}:{challenge.created_at.isoformat()}",
+            event_key,
             user.email,
-            "Your Property Finder sign-in code",
+            "Your Property Finder verification code",
             f"Your verification code is {code}. It expires in 5 minutes. "
             "If you did not request it, you can ignore this email.",
             encrypt_body=True,
@@ -376,6 +456,9 @@ def issue_otp(user, method, token_digest, target=None):
             current_app.logger.error("Twilio could not deliver an MFA code")
             return None, "The text message could not be sent. Try again later."
     db.session.commit()
+    if method == "email" and not deliver_email_outbox_event(event_key):
+        current_app.logger.warning("Email OTP delivery failed; message remains in the outbox")
+        return None, "Email verification could not be delivered"
     return challenge, None
 
 
@@ -400,7 +483,15 @@ def consume_otp(user, method, token_digest, code):
     if (
         not isinstance(code, str)
         or not re.fullmatch(r"\d{6}", code)
-        or not hmac.compare_digest(challenge.code_hash, code_digest(user.id, method, code))
+        or not hmac.compare_digest(
+            challenge.code_hash,
+            code_digest(
+                user.id,
+                method,
+                code,
+                challenge_context=token_digest,
+            ),
+        )
     ):
         challenge.attempts += 1
         if challenge.attempts >= OTP_MAX_ATTEMPTS:
@@ -420,6 +511,7 @@ def complete_factor_login(user, challenge_token):
             AuthFactorChallenge.user_id == user.id,
             AuthFactorChallenge.consumed_at.is_(None),
             AuthFactorChallenge.expires_at > now,
+            AuthFactorChallenge.purpose.in_(("login_totp", "totp_enroll")),
         )
         .with_for_update()
     ).scalar_one_or_none()
@@ -566,6 +658,11 @@ def register():
             "error": "A user with this email already exists"
         }, 409
 
+    if not email_delivery_configured():
+        return {
+            "error": "Email verification is temporarily unavailable. Try again later."
+        }, 503
+
     user = User(
         name=name,
         email=email,
@@ -577,12 +674,19 @@ def register():
     db.session.add(user)
     db.session.commit()
 
-    response = {
-        "message": "User registered successfully",
-        "user": user.to_dict(),
-    }
-    if not current_app.config.get("REQUIRE_TWO_FACTOR"):
-        response.update(authentication_response(user))
+    response, status = factor_required_response(
+        user,
+        purpose="register_email",
+        flow="registration",
+    )
+    if status != 200:
+        response["error"] = (
+            f"{response.get('error', 'Email verification could not be started.')} "
+            "The account was created; sign in with your password to resume setup."
+        )
+        return response, status
+    response["message"] = "Account created. Verify your email to continue setup."
+    response["user"] = user.to_dict()
     return response, 201
 
 
@@ -628,7 +732,7 @@ def login():
         return {"error": LOGIN_ERROR}, 401
 
     if current_app.config.get("REQUIRE_TWO_FACTOR"):
-        return factor_required_response(user), 200
+        return factor_required_response(user)
     return {"message": "Login successful", **authentication_response(user)}, 200
 
 
@@ -637,10 +741,12 @@ def two_factor_setup():
     data = request.get_json(silent=True)
     if not isinstance(data, dict):
         return {"error": "Request body must be valid JSON"}, 400
-    user = read_factor_challenge(data.get("challenge_token"), "setup")
-    if not user:
-        user = read_factor_challenge(data.get("challenge_token"), "verify")
-    if not user or user.totp_enabled:
+    user = read_factor_challenge(data.get("challenge_token"), "totp_enroll")
+    if (
+        not user
+        or user.email_verified_at is None
+        or user.totp_enabled
+    ):
         return {"error": "The authenticator setup session is invalid or expired"}, 401
 
     if user.locked_until and as_utc(user.locked_until) > datetime.now(timezone.utc):
@@ -666,10 +772,13 @@ def two_factor_confirm():
     data = request.get_json(silent=True)
     if not isinstance(data, dict):
         return {"error": "Request body must be valid JSON"}, 400
-    user = read_factor_challenge(data.get("challenge_token"), "setup")
-    if not user:
-        user = read_factor_challenge(data.get("challenge_token"), "verify")
-    if not user or user.totp_enabled or not user.totp_pending_secret:
+    user = read_factor_challenge(data.get("challenge_token"), "totp_enroll")
+    if (
+        not user
+        or user.email_verified_at is None
+        or user.totp_enabled
+        or not user.totp_pending_secret
+    ):
         return {"error": "The authenticator setup session is invalid or expired"}, 401
 
     if user.locked_until and as_utc(user.locked_until) > datetime.now(timezone.utc):
@@ -691,7 +800,7 @@ def two_factor_verify():
     data = request.get_json(silent=True)
     if not isinstance(data, dict):
         return {"error": "Request body must be valid JSON"}, 400
-    user = read_factor_challenge(data.get("challenge_token"), "verify")
+    user = read_factor_challenge(data.get("challenge_token"), "login_totp")
     if not user or not user.totp_enabled or not user.totp_secret:
         return {"error": "The authentication session is invalid or expired"}, 401
 
@@ -710,31 +819,21 @@ def send_factor_code():
     data = request.get_json(silent=True)
     if not isinstance(data, dict):
         return {"error": "Request body must be valid JSON"}, 400
-    user = get_login_factor_user(data)
-    method = data.get("method")
-    if not user or method not in {"email", "sms"}:
+    user, _purpose = get_email_factor_context(data)
+    if not user or data.get("method") != "email":
         return {"error": "The authentication session or method is invalid"}, 401
-    if method == "sms" and not (user.mfa_phone_verified and user.mfa_phone):
-        return {"error": "A verified phone number is not configured"}, 400
-    if method == "email":
-        if not email_delivery_configured():
-            return {"error": "Email verification is not configured on this server"}, 503
-        if user.totp_enabled and not user.email_verified_at:
-            return {"error": "A verified email address is required"}, 400
-        target = user.email
-    else:
-        if not sms_delivery_configured():
-            return {"error": "SMS verification is not configured on this server"}, 503
-        target = user.mfa_phone
+    if not email_delivery_configured():
+        return {"error": "Email verification is temporarily unavailable"}, 503
 
     token_digest = challenge_digest(data["challenge_token"])
-    _challenge, error = issue_otp(user, method, token_digest, target=target)
+    _challenge, error = issue_otp(
+        user, "email", token_digest, target=user.email
+    )
     if error:
         return {"error": error}, 429 if error.startswith(("Too many", "Please wait")) else 503
-    delivery = "queued for delivery" if method == "email" else "sent"
     return {
-        "message": f"A verification code was {delivery} by {method}.",
-        "expires_in_seconds": OTP_CHALLENGE_MAX_AGE_SECONDS,
+        "message": "A verification code was sent by email.",
+        "expires_in_seconds": current_app.config["EMAIL_OTP_TTL_SECONDS"],
         "resend_after_seconds": OTP_RESEND_SECONDS,
     }, 200
 
@@ -744,21 +843,60 @@ def verify_factor_code():
     data = request.get_json(silent=True)
     if not isinstance(data, dict):
         return {"error": "Request body must be valid JSON"}, 400
-    user = get_login_factor_user(data)
-    method = data.get("method")
-    if not user or method not in {"email", "sms"}:
+    user, purpose = get_email_factor_context(data)
+    if not user or data.get("method") != "email":
         return {"error": "The authentication session or method is invalid"}, 401
-    if method == "sms" and not (user.mfa_phone_verified and user.mfa_phone):
-        return {"error": "A verified phone number is not configured"}, 400
-    if method == "email" and user.totp_enabled and not user.email_verified_at:
-        return {"error": "A verified email address is required"}, 400
     token_digest = challenge_digest(data["challenge_token"])
-    if not consume_otp(user, method, token_digest, data.get("code")):
+    if not consume_otp(user, "email", token_digest, data.get("code")):
         record_failed_login(user, datetime.now(timezone.utc))
         return {"error": "The verification code is invalid or expired"}, 401
-    if method == "email" and not user.email_verified_at:
-        user.email_verified_at = datetime.now(timezone.utc)
-    return complete_factor_login(user, data["challenge_token"])
+
+    challenge = db.session.execute(
+        select(AuthFactorChallenge)
+        .where(
+            AuthFactorChallenge.challenge_hash == token_digest,
+            AuthFactorChallenge.user_id == user.id,
+            AuthFactorChallenge.purpose == purpose,
+            AuthFactorChallenge.consumed_at.is_(None),
+        )
+        .with_for_update()
+    ).scalar_one_or_none()
+    if not challenge:
+        db.session.rollback()
+        return {"error": "The authentication session is invalid or expired"}, 401
+
+    now = datetime.now(timezone.utc)
+    challenge.consumed_at = now
+    if user.email_verified_at is None:
+        user.email_verified_at = now
+    next_purpose = (
+        "login_totp"
+        if purpose == "login_email" and user.totp_enabled
+        else "totp_enroll"
+    )
+    next_token = create_factor_challenge(user, next_purpose)
+    db.session.commit()
+    if next_purpose == "totp_enroll":
+        response = {
+            "mfa_setup_required": True,
+            "factor_step": "authenticator_enrollment",
+            "challenge_token": next_token,
+            "expires_in_seconds": FACTOR_CHALLENGE_MAX_AGE_SECONDS,
+            "challenge_expires_in_seconds": FACTOR_CHALLENGE_MAX_AGE_SECONDS,
+        }
+        if purpose == "register_email":
+            response["flow"] = "registration"
+        return response, 200
+    response = {
+        "mfa_required": True,
+        "factor_step": "authenticator_totp",
+        "challenge_token": next_token,
+        "expires_in_seconds": FACTOR_CHALLENGE_MAX_AGE_SECONDS,
+        "challenge_expires_in_seconds": FACTOR_CHALLENGE_MAX_AGE_SECONDS,
+    }
+    if purpose == "register_email":
+        response["flow"] = "registration"
+    return response, 200
 
 
 @auth_bp.route("/recovery-codes/verify", methods=["POST"])
@@ -766,9 +904,15 @@ def verify_recovery_code():
     data = request.get_json(silent=True)
     if not isinstance(data, dict):
         return {"error": "Request body must be valid JSON"}, 400
-    user = get_login_factor_user(data)
+    user = get_login_factor_user(data, "login_totp")
     code = data.get("code")
-    if not user or not isinstance(code, str) or len(code) > 64:
+    if (
+        not user
+        or not user.totp_enabled
+        or user.email_verified_at is None
+        or not isinstance(code, str)
+        or len(code) > 64
+    ):
         return {"error": "The authentication session or recovery code is invalid"}, 401
 
     normalized = code.strip().replace("-", "").upper()
@@ -785,8 +929,39 @@ def verify_recovery_code():
     if not recovery:
         record_failed_login(user, datetime.now(timezone.utc))
         return {"error": "The recovery code is invalid or already used"}, 401
+
+    challenge = db.session.execute(
+        select(AuthFactorChallenge)
+        .where(
+            AuthFactorChallenge.challenge_hash
+            == challenge_digest(data["challenge_token"]),
+            AuthFactorChallenge.user_id == user.id,
+            AuthFactorChallenge.purpose == "login_totp",
+            AuthFactorChallenge.consumed_at.is_(None),
+        )
+        .with_for_update()
+    ).scalar_one_or_none()
+    if not challenge:
+        db.session.rollback()
+        return {"error": "The authentication session is invalid or expired"}, 401
+
+    now = datetime.now(timezone.utc)
     recovery.used_at = datetime.now(timezone.utc)
-    return complete_factor_login(user, data["challenge_token"])
+    challenge.consumed_at = now
+    user.totp_secret = None
+    user.totp_pending_secret = None
+    user.totp_enabled = False
+    user.totp_last_counter = None
+    setup_token = create_factor_challenge(user, "totp_enroll")
+    db.session.commit()
+    return {
+        "mfa_setup_required": True,
+        "recovery_required": True,
+        "factor_step": "authenticator_enrollment",
+        "challenge_token": setup_token,
+        "expires_in_seconds": FACTOR_CHALLENGE_MAX_AGE_SECONDS,
+        "challenge_expires_in_seconds": FACTOR_CHALLENGE_MAX_AGE_SECONDS,
+    }, 200
 
 
 @auth_bp.route("/two-factor/methods", methods=["GET"])
@@ -1013,92 +1188,16 @@ def delete_passkey(credential_id):
 
 @auth_bp.route("/passkeys/authentication/options", methods=["POST"])
 def begin_passkey_authentication():
-    data = request.get_json(silent=True)
-    if not isinstance(data, dict):
-        return {"error": "Request body must be valid JSON"}, 400
-    user = get_login_factor_user(data)
-    if not user:
-        return {"error": "The authentication session is invalid or expired"}, 401
-    credentials = PasskeyCredential.query.filter_by(user_id=user.id).all()
-    if not credentials:
-        return {"error": "No passkey is configured for this account"}, 400
-    config = webauthn_configuration()
-    options = generate_authentication_options(
-        rp_id=config["rp_id"],
-        allow_credentials=[
-            PublicKeyCredentialDescriptor(id=base64url_to_bytes(item.credential_id))
-            for item in credentials
-        ],
-        user_verification=UserVerificationRequirement.PREFERRED,
-    )
-    challenge_token = secrets.token_urlsafe(32)
-    prune_expired_auth_challenges(datetime.now(timezone.utc))
-    db.session.add(
-        AuthPasskeyChallenge(
-            challenge_hash=challenge_digest(challenge_token),
-            user_id=user.id,
-            purpose="login",
-            challenge=bytes_to_base64url(options.challenge),
-            expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
-        )
-    )
-    db.session.commit()
     return {
-        "challenge_token": challenge_token,
-        "options": json.loads(options_to_json(options)),
-    }, 200
+        "error": "Passkeys cannot replace email verification or an authenticator code."
+    }, 403
 
 
 @auth_bp.route("/passkeys/authentication/complete", methods=["POST"])
 def complete_passkey_authentication():
-    data = request.get_json(silent=True)
-    if not isinstance(data, dict) or not isinstance(data.get("credential"), dict):
-        return {"error": "A valid passkey credential is required"}, 400
-    login_token = data.get("login_challenge_token")
-    user = read_factor_challenge(login_token, "verify")
-    passkey_token = data.get("passkey_challenge_token")
-    challenge = AuthPasskeyChallenge.query.filter_by(
-        challenge_hash=challenge_digest(passkey_token) if isinstance(passkey_token, str) else "",
-        user_id=user.id if user else None,
-        purpose="login",
-        consumed_at=None,
-    ).first()
-    now = datetime.now(timezone.utc)
-    if (
-        not user
-        or not challenge
-        or as_utc(challenge.expires_at) <= now
-    ):
-        return {"error": "The passkey sign-in session is invalid or expired"}, 401
-    credential_payload = data["credential"]
-    credential_id = credential_payload.get("id")
-    credential = (
-        PasskeyCredential.query.filter_by(
-            user_id=user.id,
-            credential_id=credential_id,
-        ).first()
-        if isinstance(credential_id, str)
-        else None
-    )
-    if not credential:
-        return {"error": "This passkey is not registered"}, 401
-    config = webauthn_configuration()
-    try:
-        verification = verify_authentication_response(
-            credential=credential_payload,
-            expected_challenge=base64url_to_bytes(challenge.challenge),
-            expected_rp_id=config["rp_id"],
-            expected_origin=config["origin"],
-            credential_public_key=base64url_to_bytes(credential.public_key),
-            credential_current_sign_count=credential.sign_count,
-        )
-    except (WebAuthnException, ValueError, TypeError):
-        record_failed_login(user, now)
-        return {"error": "The passkey could not be verified"}, 401
-    credential.sign_count = verification.new_sign_count
-    credential.last_used_at = now
-    challenge.consumed_at = now
-    return complete_factor_login(user, login_token)
+    return {
+        "error": "Passkeys cannot replace email verification or an authenticator code."
+    }, 403
 
 
 @auth_bp.route("/google-login", methods=["POST"])
@@ -1160,12 +1259,10 @@ def google_login():
         db.session.add(user)
     elif not user.google_sub:
         user.google_sub = google_sub
-    if not user.email_verified_at:
-        user.email_verified_at = datetime.now(timezone.utc)
     db.session.commit()
 
     if current_app.config.get("REQUIRE_TWO_FACTOR"):
-        return factor_required_response(user), 200
+        return factor_required_response(user)
     return {"message": "Login successful", **authentication_response(user)}, 200
 
 
@@ -1386,12 +1483,11 @@ def github_login():
         db.session.add(user)
     elif not user.github_sub:
         user.github_sub = github_sub
-    if not user.email_verified_at:
-        user.email_verified_at = datetime.now(timezone.utc)
     db.session.commit()
 
     if current_app.config.get("REQUIRE_TWO_FACTOR"):
-        return github_callback_response(factor_required_response(user))
+        body, status = factor_required_response(user)
+        return github_callback_response(body, status)
     return github_callback_response(
         {"message": "Login successful", **authentication_response(user)}
     )
@@ -1403,7 +1499,11 @@ def refresh():
     claims = get_jwt()
     identity = get_jwt_identity()
     revoke_token(claims)
-    mfa_claims = {"mfa_verified": claims.get("mfa_verified") is True}
+    mfa_claims: dict[str, bool | list[str]] = {
+        "mfa_verified": claims.get("mfa_verified") is True
+    }
+    if claims.get("auth_factors") == REQUIRED_AUTH_FACTORS:
+        mfa_claims["auth_factors"] = REQUIRED_AUTH_FACTORS
 
     return {
         "access_token": create_access_token(

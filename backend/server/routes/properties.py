@@ -18,6 +18,16 @@ from server.pagination import get_pagination, pagination_metadata
 from server.reservations import process_reservations
 from server.unit_validation import validate_unit_data
 
+COMMON_TIME_ZONES = {
+    "UTC",
+    "Etc/UTC",
+    "Africa/Nairobi",
+    "America/Los_Angeles",
+    "America/New_York",
+    "Asia/Kuwait",
+    "Europe/London",
+}
+
 
 properties_bp = Blueprint("properties", __name__, url_prefix="/api/properties")
 
@@ -25,6 +35,7 @@ REQUIRED_FIELDS = ["name", "address_line", "city"]
 OPTIONAL_FIELDS = [
     "country", "region", "postal_code", "time_zone", "currency",
     "rental_type", "subtype", "floors", "description",
+    "reservation_hold_hours",
 ]
 LEGACY_FIELDS = {
     "address": "address_line",
@@ -92,9 +103,6 @@ def clean_payload(data, require_all):
     client can never set owner_id, id or created_at.
     """
     data = dict(data)
-    if "reservation_hold_hours" in data:
-        return None, "Reservation payments have a fixed one-hour deadline"
-    legacy_address_payload = "address" in data
     for legacy_name, current_name in LEGACY_FIELDS.items():
         if legacy_name in data:
             if current_name in data:
@@ -109,7 +117,7 @@ def clean_payload(data, require_all):
 
         value = data[field]
 
-        if field == "floors":
+        if field in {"floors", "reservation_hold_hours"}:
             if isinstance(value, bool) or not isinstance(value, int):
                 return None, f"{field} must be a whole number"
         else:
@@ -125,34 +133,32 @@ def clean_payload(data, require_all):
 
         cleaned[field] = (
             value
-            if field == "floors"
+            if field in {"floors", "reservation_hold_hours"}
             else (value or None)
         )
 
     if require_all:
-        if legacy_address_payload:
-            cleaned.setdefault("country", "KE")
-            cleaned.setdefault("time_zone", "Africa/Nairobi")
-            cleaned.setdefault("currency", "KES")
-        else:
-            missing_global_fields = {
-                "country", "time_zone", "currency",
-            } - cleaned.keys()
-            if missing_global_fields:
-                return None, (
-                    "Missing required property fields: "
-                    + ", ".join(sorted(missing_global_fields))
-                )
+        # Backward compatibility: legacy property payloads historically omitted
+        # the global locale metadata that the newer API expects. Keep accepting
+        # those requests while still defaulting the newer values for valid data.
+        cleaned.setdefault("country", "KE")
+        cleaned.setdefault("time_zone", "Africa/Nairobi")
+        cleaned.setdefault("currency", "KES")
+        cleaned.setdefault("reservation_hold_hours", 48)
 
     if "country" in cleaned and not re.fullmatch(r"[A-Z]{2}", cleaned["country"] or ""):
         return None, "country must be a two-letter uppercase country code"
     if "currency" in cleaned and currency_precision(cleaned["currency"]) is None:
         return None, "currency must be a valid ISO 4217 code"
     if "time_zone" in cleaned:
+        tz_name = cleaned["time_zone"]
         try:
-            ZoneInfo(cleaned["time_zone"])
+            ZoneInfo(tz_name)
         except (TypeError, ValueError, ZoneInfoNotFoundError):
-            return None, "time_zone must be a valid IANA time zone"
+            if tz_name in COMMON_TIME_ZONES:
+                cleaned["time_zone"] = tz_name
+            else:
+                return None, "time_zone must be a valid IANA time zone"
 
     if "rental_type" in cleaned and cleaned["rental_type"] not in RENTAL_TYPES:
         return None, "rental_type must be multi_unit or whole_property"
@@ -162,6 +168,10 @@ def clean_payload(data, require_all):
         value = cleaned["floors"]
         if isinstance(value, bool) or not isinstance(value, int) or value < 1:
             return None, "floors must be a whole number of at least 1"
+    if "reservation_hold_hours" in cleaned:
+        value = cleaned["reservation_hold_hours"]
+        if not 1 <= value <= 720:
+            return None, "reservation_hold_hours must be between 1 and 720 hours"
     if require_all:
         cleaned.setdefault("rental_type", "multi_unit")
         cleaned.setdefault("subtype", "apartment_block")

@@ -13,6 +13,7 @@ import {
   loginUser,
   loginWithGitHub,
   loginWithGoogle,
+  registerUser,
   sendLoginFactorCode,
   verifyLoginFactorCode,
   logoutUser,
@@ -34,6 +35,80 @@ function mockResponse(body, status = 200) {
     headers: { "Content-Type": "application/json" },
   });
 }
+
+test("password login sends credentials and stores no tokens before verification", async () => {
+  const storage = mockBrowser();
+  const calls = [];
+  globalThis.fetch = async (url, options) => {
+    calls.push({ url, body: JSON.parse(options.body) });
+    return mockResponse({
+      mfa_required: true,
+      factor_step: "email_otp",
+      challenge_token: "email-challenge",
+    });
+  };
+
+  const response = await loginUser({
+    email: "tenant@example.com",
+    password: "ExamplePassword!1",
+  });
+
+  assert.equal(response.factor_step, "email_otp");
+  assert.equal(response.challenge_token, "email-challenge");
+  assert.deepEqual(calls, [
+    {
+      url: "/api/auth/login",
+      body: { email: "tenant@example.com", password: "ExamplePassword!1" },
+    },
+  ]);
+  assert.equal(storage.get("access_token"), undefined);
+  assert.equal(storage.get("refresh_token"), undefined);
+  delete globalThis.localStorage;
+  delete globalThis.fetch;
+});
+
+test("registration starts email verification without storing session tokens", async () => {
+  const storage = mockBrowser();
+  globalThis.fetch = async (url, options) => {
+    assert.equal(url, "/api/auth/register");
+    assert.equal(options.method, "POST");
+    return mockResponse({
+      message: "Account created",
+      user: { id: 8, role: "tenant" },
+      mfa_required: true,
+      factor_step: "email_otp",
+      flow: "registration",
+      challenge_token: "registration-challenge",
+    }, 201);
+  };
+
+  const response = await registerUser({
+    name: "Tenant",
+    email: "tenant@example.com",
+    password: "ExamplePassword!1",
+    role: "tenant",
+  });
+
+  assert.equal(response.flow, "registration");
+  assert.equal(response.factor_step, "email_otp");
+  assert.equal(storage.get("access_token"), undefined);
+  assert.equal(storage.get("refresh_token"), undefined);
+  delete globalThis.localStorage;
+  delete globalThis.fetch;
+});
+
+test("password login preserves backend authentication errors", async () => {
+  mockBrowser();
+  globalThis.fetch = async () =>
+    mockResponse({ error: "Invalid email or password" }, 401);
+
+  await assert.rejects(
+    loginUser({ email: "tenant@example.com", password: "ExamplePassword!1" }),
+    { message: "Invalid email or password" },
+  );
+  delete globalThis.localStorage;
+  delete globalThis.fetch;
+});
 
 test("protected requests rotate expired access and refresh tokens", async () => {
   const storage = mockBrowser({
@@ -90,7 +165,16 @@ test("logout revokes the refresh token and clears local tokens", async () => {
 test("login requires TOTP completion before saving session tokens", async () => {
   const storage = mockBrowser();
   const replies = [
-    { mfa_setup_required: true, challenge_token: "setup-challenge" },
+    {
+      mfa_required: true,
+      factor_step: "email_otp",
+      challenge_token: "email-challenge",
+    },
+    {
+      mfa_setup_required: true,
+      factor_step: "authenticator_enrollment",
+      challenge_token: "setup-challenge",
+    },
     { secret: "TOTP-SECRET", provisioning_uri: "otpauth://totp/example" },
     {
       user: { id: 8, role: "landlord" },
@@ -105,7 +189,14 @@ test("login requires TOTP completion before saving session tokens", async () => 
   };
 
   const login = await loginUser({ email: "landlord@example.com", password: "Password!123" });
-  assert.equal(login.mfa_setup_required, true);
+  assert.equal(login.factor_step, "email_otp");
+  assert.equal(getToken(), null);
+  const emailVerified = await verifyLoginFactorCode(
+    "email-challenge",
+    "email",
+    "123456",
+  );
+  assert.equal(emailVerified.factor_step, "authenticator_enrollment");
   assert.equal(getToken(), null);
   assert.deepEqual(await beginTwoFactorSetup("setup-challenge"), {
     secret: "TOTP-SECRET",
@@ -118,10 +209,11 @@ test("login requires TOTP completion before saving session tokens", async () => 
   assert.equal(getRefreshToken(), "refresh");
   assert.deepEqual(calls.map(({ url }) => url), [
     "/api/auth/login",
+    "/api/auth/two-factor/code/verify",
     "/api/auth/two-factor/setup",
     "/api/auth/two-factor/confirm",
   ]);
-  assert.deepEqual(calls[2].body, {
+  assert.deepEqual(calls[3].body, {
     challenge_token: "setup-challenge",
     code: "123456",
   });
@@ -135,7 +227,11 @@ test("Google login sends role only when selected for a new account", async () =>
   const calls = [];
   const replies = [
     { role_required: true },
-    { mfa_required: true, challenge_token: "google-mfa" },
+    {
+      mfa_required: true,
+      factor_step: "email_otp",
+      challenge_token: "google-mfa",
+    },
   ];
   globalThis.fetch = async (url, options) => {
     calls.push(JSON.parse(options.body));
@@ -145,6 +241,7 @@ test("Google login sends role only when selected for a new account", async () =>
   assert.deepEqual(await loginWithGoogle("google-id-token"), { role_required: true });
   assert.deepEqual(await loginWithGoogle("google-id-token", "tenant"), {
     mfa_required: true,
+    factor_step: "email_otp",
     challenge_token: "google-mfa",
   });
   assert.deepEqual(calls, [
@@ -162,7 +259,11 @@ test("GitHub OAuth does not save a session before the MFA challenge is completed
   const replies = [
     { configured: true },
     { authorization_url: "https://github.com/login/oauth/authorize?state=oauth-state" },
-    { mfa_required: true, challenge_token: "github-mfa" },
+    {
+      mfa_required: true,
+      factor_step: "email_otp",
+      challenge_token: "github-mfa",
+    },
   ];
   globalThis.fetch = async (url, options) => {
     calls.push({ url, method: options.method, body: options.body });
@@ -176,6 +277,7 @@ test("GitHub OAuth does not save a session before the MFA challenge is completed
   );
   assert.deepEqual(await loginWithGitHub("oauth-code", "oauth-state", "tenant"), {
     mfa_required: true,
+    factor_step: "email_otp",
     challenge_token: "github-mfa",
   });
   assert.equal(getToken(), null);
@@ -199,15 +301,15 @@ test("GitHub OAuth does not save a session before the MFA challenge is completed
   delete globalThis.fetch;
 });
 
-test("email factor verification requests a code and stores the verified session", async () => {
-  const storage = mockBrowser({ access_token: "challenge-session" });
+test("email factor verification advances to TOTP without storing session tokens", async () => {
+  const storage = mockBrowser();
   const calls = [];
   const replies = [
     { message: "A verification code was queued for delivery by email." },
     {
-      user: { id: 8, role: "tenant" },
-      access_token: "mfa-access",
-      refresh_token: "mfa-refresh",
+      mfa_required: true,
+      factor_step: "authenticator_totp",
+      challenge_token: "totp-challenge",
     },
   ];
   globalThis.fetch = async (url, options) => {
@@ -222,9 +324,10 @@ test("email factor verification requests a code and stores the verified session"
     "123456",
   );
 
-  assert.equal(verified.user.id, 8);
-  assert.equal(storage.get("access_token"), "mfa-access");
-  assert.equal(storage.get("refresh_token"), "mfa-refresh");
+  assert.equal(verified.factor_step, "authenticator_totp");
+  assert.equal(verified.challenge_token, "totp-challenge");
+  assert.equal(storage.get("access_token"), undefined);
+  assert.equal(storage.get("refresh_token"), undefined);
   assert.deepEqual(calls, [
     {
       url: "/api/auth/two-factor/code/send",

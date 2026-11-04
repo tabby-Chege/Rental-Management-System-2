@@ -2,14 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import QRCode from "qrcode";
 import {
-  prepareRequestOptions,
-  serializeCredential,
-} from "../../utils/webauthn";
-import {
   beginTwoFactorSetup,
-  beginPasskeyAuthentication,
   completeTwoFactor,
-  completePasskeyAuthentication,
   beginGitHubLogin,
   getGitHubOAuthConfig,
   loginUser,
@@ -24,27 +18,59 @@ import { safeReturnTo } from "../../utils/authRedirect.js";
 function Login() {
   const location = useLocation();
   const navigate = useNavigate();
+  const registrationChallenge = location.state?.registrationChallenge;
+  const hasRegistrationChallenge =
+    registrationChallenge?.flow === "registration" &&
+    registrationChallenge?.factor_step === "email_otp" &&
+    typeof registrationChallenge?.challenge_token === "string";
   const googleButtonRef = useRef(null);
   const totpQrRef = useRef(null);
   const googleCredentialHandler = useRef(null);
   const githubCallbackHandler = useRef(null);
   const [googleScriptReady, setGoogleScriptReady] = useState(false);
   const [githubOAuthAvailable, setGithubOAuthAvailable] = useState(false);
-  const [factorChallenge, setFactorChallenge] = useState(null);
+  const [factorChallenge, setFactorChallenge] = useState(() =>
+    hasRegistrationChallenge
+      ? {
+          token: registrationChallenge.challenge_token,
+          stage: registrationChallenge.factor_step,
+          email: registrationChallenge.email,
+          flow: "registration",
+        }
+      : null,
+  );
   const [factorSetup, setFactorSetup] = useState(null);
   const [factorCode, setFactorCode] = useState("");
-  const [selectedFactor, setSelectedFactor] = useState("totp");
-  const [factorCodeRequested, setFactorCodeRequested] = useState(false);
-  const [factorCodeExpiresAt, setFactorCodeExpiresAt] = useState(null);
-  const [factorResendAvailableAt, setFactorResendAvailableAt] = useState(null);
-  const [currentTime, setCurrentTime] = useState(0);
+  const [recoveryMode, setRecoveryMode] = useState(false);
+  const [factorCodeExpiresAt, setFactorCodeExpiresAt] = useState(() =>
+    hasRegistrationChallenge
+      ? Date.now() + (registrationChallenge.expires_in_seconds || 300) * 1000
+      : null,
+  );
+  const [factorResendAvailableAt, setFactorResendAvailableAt] = useState(() =>
+    hasRegistrationChallenge
+      ? Date.now() + (registrationChallenge.resend_after_seconds || 30) * 1000
+      : null,
+  );
+  const [challengeExpiresAt, setChallengeExpiresAt] = useState(() =>
+    hasRegistrationChallenge
+      ? Date.now() +
+        (registrationChallenge.challenge_expires_in_seconds ||
+          registrationChallenge.expires_in_seconds ||
+          600) *
+          1000
+      : null,
+  );
+  const [currentTime, setCurrentTime] = useState(() =>
+    hasRegistrationChallenge ? Date.now() : 0,
+  );
   const [googleCredential, setGoogleCredential] = useState("");
   const [googleRole, setGoogleRole] = useState("landlord");
   const [githubRole, setGithubRole] = useState("landlord");
   const [googleRoleRequired, setGoogleRoleRequired] = useState(false);
 
   const [formData, setFormData] = useState({
-    email: "",
+    email: location.state?.email || "",
     password: "",
   });
 
@@ -102,10 +128,10 @@ function Login() {
   }, []);
 
   useEffect(() => {
-    if (!factorCodeRequested) return undefined;
+    if (!factorChallenge) return undefined;
     const timer = window.setInterval(() => setCurrentTime(Date.now()), 1000);
     return () => window.clearInterval(timer);
-  }, [factorCodeRequested]);
+  }, [factorChallenge]);
 
   useEffect(() => {
     if (!googleScriptReady || !googleClientId || !googleButtonRef.current) return;
@@ -141,21 +167,36 @@ function Login() {
   }
 
   async function handleFactorChallenge(response) {
+    const stage = response.factor_step;
     setFactorChallenge({
       token: response.challenge_token,
-      setup: Boolean(response.mfa_setup_required),
-      methods: response.methods || [],
-      totpSetupAvailable: response.totp_setup_available === true,
+      stage,
+      email: response.email,
+      flow: response.flow,
     });
-    setSelectedFactor(
-      response.methods?.[0]?.id || (response.mfa_setup_required ? "totp" : ""),
-    );
-    setFactorCodeRequested(false);
-    setFactorCodeExpiresAt(null);
-    setFactorResendAvailableAt(null);
+    setRecoveryMode(false);
     setFactorCode("");
     setFactorSetup(null);
-    if (response.mfa_setup_required) {
+    const now = Date.now();
+    setFactorCodeExpiresAt(
+      stage === "email_otp"
+        ? now + (response.expires_in_seconds || 300) * 1000
+        : null,
+    );
+    setFactorResendAvailableAt(
+      stage === "email_otp"
+        ? now + (response.resend_after_seconds || 30) * 1000
+        : null,
+    );
+    setChallengeExpiresAt(
+      now +
+        (response.challenge_expires_in_seconds ||
+          response.expires_in_seconds ||
+          600) *
+          1000,
+    );
+    setCurrentTime(now);
+    if (stage === "authenticator_enrollment") {
       try {
         const setup = await beginTwoFactorSetup(response.challenge_token);
         setFactorSetup(setup);
@@ -170,7 +211,18 @@ function Login() {
       await handleFactorChallenge(response);
       return;
     }
-    finishSignIn(response.user);
+    throw new Error("Complete both verification steps before signing in.");
+  }
+
+  function restartAuthentication() {
+    setFactorChallenge(null);
+    setFactorSetup(null);
+    setFactorCode("");
+    setRecoveryMode(false);
+    setFactorCodeExpiresAt(null);
+    setFactorResendAvailableAt(null);
+    setChallengeExpiresAt(null);
+    setError("");
   }
 
   async function handleGoogleCredential(credential, role) {
@@ -277,28 +329,30 @@ function Login() {
     setError("");
     setLoading(true);
     try {
-      let response;
-      if (factorChallenge.setup || selectedFactor === "totp") {
-        response = await completeTwoFactor(
+      if (factorChallenge.stage === "email_otp") {
+        const response = await verifyLoginFactorCode(
+          factorChallenge.token,
+          "email",
+          factorCode.trim(),
+        );
+        await handleFactorChallenge(response);
+      } else if (recoveryMode) {
+        const response = await verifyRecoveryCode(
           factorChallenge.token,
           factorCode.trim(),
-          factorChallenge.setup,
         );
-      } else if (selectedFactor === "recovery") {
-        response = await verifyRecoveryCode(factorChallenge.token, factorCode.trim());
+        await handleFactorChallenge(response);
       } else {
-        response = await verifyLoginFactorCode(
+        const response = await completeTwoFactor(
           factorChallenge.token,
-          selectedFactor,
           factorCode.trim(),
+          factorChallenge.stage === "authenticator_enrollment",
         );
+        finishSignIn(response.user);
       }
-      finishSignIn(response.user);
     } catch (requestError) {
       setError(
-        requestError.message?.includes("invalid or expired")
-          ? "The code is invalid or expired. Request a new email code or try the current authenticator code."
-          : requestError.message || "The authenticator code could not be verified.",
+        requestError.message || "The verification code could not be verified.",
       );
     } finally {
       setLoading(false);
@@ -309,44 +363,15 @@ function Login() {
     setError("");
     setLoading(true);
     try {
-      const response = await sendLoginFactorCode(factorChallenge.token, selectedFactor);
-      setFactorCodeRequested(true);
+      const response = await sendLoginFactorCode(factorChallenge.token, "email");
       setFactorCode("");
       setCurrentTime(Date.now());
-      setFactorCodeExpiresAt(
-        Date.now() + (response.expires_in_seconds || 300) * 1000,
-      );
+      setFactorCodeExpiresAt(Date.now() + (response.expires_in_seconds || 300) * 1000);
       setFactorResendAvailableAt(
         Date.now() + (response.resend_after_seconds || 30) * 1000,
       );
     } catch (requestError) {
       setError(requestError.message || "The verification code could not be sent.");
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  async function handlePasskeySignIn() {
-    setError("");
-    setLoading(true);
-    try {
-      if (!navigator.credentials?.get) {
-        throw new Error("Passkeys are not supported by this browser.");
-      }
-      const { challenge_token: passkeyChallengeToken, options } =
-        await beginPasskeyAuthentication(factorChallenge.token);
-      const credential = await navigator.credentials.get({
-        publicKey: prepareRequestOptions(options),
-      });
-      if (!credential) throw new Error("Passkey sign-in was cancelled.");
-      const response = await completePasskeyAuthentication(
-        factorChallenge.token,
-        passkeyChallengeToken,
-        serializeCredential(credential),
-      );
-      finishSignIn(response.user);
-    } catch (requestError) {
-      setError(requestError.message || "Passkey sign-in failed.");
     } finally {
       setLoading(false);
     }
@@ -377,38 +402,11 @@ function Login() {
     }
   }
 
-  async function handleSelectFactor(methodId) {
-    setSelectedFactor(methodId);
-    setFactorCode("");
-    setFactorCodeRequested(false);
-    setFactorCodeExpiresAt(null);
-    setFactorResendAvailableAt(null);
-    if (methodId !== "totp_setup") return;
-
-    setError("");
-    setLoading(true);
-    try {
-      const setup = await beginTwoFactorSetup(factorChallenge.token);
-      setFactorSetup(setup);
-      setFactorChallenge((current) => ({ ...current, setup: true }));
-      setSelectedFactor("totp");
-    } catch (requestError) {
-      setError(requestError.message || "Could not start authenticator setup.");
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  const visibleFactorMethods = factorChallenge
-    ? [
-        ...factorChallenge.methods,
-        ...(factorChallenge.totpSetupAvailable
-          ? [{ id: "totp_setup", label: "Set up authenticator app" }]
-          : []),
-      ]
-    : [];
   const factorCodeExpired = (
     factorCodeExpiresAt !== null && currentTime >= factorCodeExpiresAt
+  );
+  const challengeExpired = (
+    challengeExpiresAt !== null && currentTime >= challengeExpiresAt
   );
   const resendSeconds = factorResendAvailableAt
     ? Math.max(0, Math.ceil((factorResendAvailableAt - currentTime) / 1000))
@@ -438,28 +436,61 @@ function Login() {
 
         <div className="auth-card">
           <span className="auth-card-kicker">
-            {factorChallenge ? "Account protection" : "Your rental workspace"}
+            {factorChallenge
+              ? factorChallenge.flow === "registration"
+                ? "Account setup"
+                : "Account protection"
+              : "Your rental workspace"}
           </span>
           <h1>
             {factorChallenge
-              ? factorChallenge.setup
-                ? "Set up two-factor sign-in"
-                : "Verify it’s you"
+              ? factorChallenge.stage === "email_otp"
+                ? "Step 2 of 3: Verify your email"
+                : factorChallenge.stage === "authenticator_enrollment"
+                  ? "Step 3 of 3: Set up your authenticator"
+                  : recoveryMode
+                    ? "Recover your authenticator"
+                    : "Step 3 of 3: Enter your authenticator code"
               : googleRoleRequired
                 ? "Choose your account type"
                 : "Welcome back"}
           </h1>
           <p className="auth-description">
             {factorChallenge
-              ? factorChallenge.setup
-                ? factorChallenge.totpSetupAvailable
-                  ? "Set up an authenticator app, or return to email verification."
-                  : "Set up an authenticator app to protect your account."
-                : "Choose an available method: use your authenticator app or request an email code."
+              ? factorChallenge.stage === "email_otp"
+                ? `Enter the one-time code sent to ${factorChallenge.email}.`
+                : factorChallenge.stage === "authenticator_enrollment"
+                  ? "Your email is verified. Register an authenticator app before continuing."
+                  : recoveryMode
+                    ? "Enter one unused recovery code. You will need to register a new authenticator before access is restored."
+                    : "Your email is verified. Enter the current six-digit code from your authenticator app."
               : googleRoleRequired
                 ? "Choose how you’ll use Property Finder. This will be your account type."
                 : "Log in to continue to your rental workspace."}
           </p>
+          {factorChallenge?.flow === "registration" && (
+            <p className="auth-password-hint" role="status">
+                Your account is created but not active yet. Complete email
+                verification and authenticator setup now, or sign in later to
+                resume the required steps.
+            </p>
+          )}
+
+          {factorChallenge && (
+            <ol className="auth-factor-progress" aria-label="Sign-in progress">
+              <li>Credentials</li>
+              <li aria-current={factorChallenge.stage === "email_otp" ? "step" : undefined}>
+                Email code
+              </li>
+              <li
+                aria-current={
+                  factorChallenge.stage !== "email_otp" ? "step" : undefined
+                }
+              >
+                Authenticator
+              </li>
+            </ol>
+          )}
 
           {(error || oauthCallbackError) && (
             <p className="auth-error" role="alert">
@@ -469,11 +500,63 @@ function Login() {
 
           {factorChallenge ? (
             <form onSubmit={handleFactorSubmit}>
-              {factorChallenge.setup && factorSetup ? (
+              {challengeExpired ? (
+                <>
+                  <p className="auth-password-hint" role="status">
+                    This verification session has expired. Start again with your email and password.
+                  </p>
+                  <button
+                    type="button"
+                    className="auth-secondary-button"
+                    onClick={restartAuthentication}
+                  >
+                    Return to sign in
+                  </button>
+                </>
+              ) : factorChallenge.stage === "email_otp" ? (
+                <>
+                  <p className="auth-password-hint" role="status">
+                    {factorCodeExpired
+                      ? "This email code has expired. Request a new code to continue."
+                      : `The code expires in ${Math.max(
+                          0,
+                          Math.ceil((factorCodeExpiresAt - currentTime) / 60000),
+                        )} minute(s).`}
+                  </p>
+                  <label htmlFor="factor-code">Six-digit email verification code</label>
+                  <input
+                    id="factor-code"
+                    name="factorCode"
+                    type="text"
+                    inputMode="numeric"
+                    autoComplete="one-time-code"
+                    pattern="[0-9]{6}"
+                    maxLength={6}
+                    value={factorCode}
+                    onChange={(event) =>
+                      setFactorCode(event.target.value.replace(/\D/g, ""))
+                    }
+                    placeholder="000000"
+                    required
+                  />
+                  <button
+                    type="button"
+                    className="auth-secondary-button"
+                    onClick={handleSendFactorCode}
+                    disabled={loading || resendSeconds > 0}
+                  >
+                    {loading
+                      ? "Sending..."
+                      : resendSeconds > 0
+                        ? `Resend available in ${resendSeconds}s`
+                        : "Resend email code"}
+                  </button>
+                </>
+              ) : factorChallenge.stage === "authenticator_enrollment" && factorSetup ? (
                 <div className="auth-totp-setup">
                   <p>
                     Scan this QR code with an authenticator app, then enter the
-                    6-digit code it generates. Keep the code and setup key private.
+                    six-digit code it generates. Keep the setup key private.
                   </p>
                   <canvas
                     ref={totpQrRef}
@@ -486,10 +569,10 @@ function Login() {
                   </p>
                   <code>{factorSetup.secret}</code>
                   <p className="auth-totp-app-hint">
-                    Compatible apps include Google Authenticator, Microsoft
-                    Authenticator, and Authy.
+                    Compatible apps include Google Authenticator and Microsoft
+                    Authenticator.
                   </p>
-                  <label htmlFor="factor-code">6-digit authenticator code</label>
+                  <label htmlFor="factor-code">Six-digit authenticator-app code</label>
                   <input
                     id="factor-code"
                     name="factorCode"
@@ -499,147 +582,137 @@ function Login() {
                     pattern="[0-9]{6}"
                     maxLength={6}
                     value={factorCode}
-                    onChange={(event) => setFactorCode(event.target.value.replace(/\D/g, ""))}
+                    onChange={(event) =>
+                      setFactorCode(event.target.value.replace(/\D/g, ""))
+                    }
                     placeholder="000000"
                     required
                   />
                 </div>
-              ) : !factorChallenge.setup ? (
+              ) : factorChallenge.stage === "authenticator_totp" ? (
                 <>
-                  <fieldset className="auth-factor-options">
-                    <legend>Choose a verification method</legend>
-                    {visibleFactorMethods.map((method) => (
+                  <p className="auth-password-hint" role="status">
+                    This authenticator challenge expires in{" "}
+                    {Math.max(
+                      0,
+                      Math.ceil((challengeExpiresAt - currentTime) / 60000),
+                    )}{" "}
+                    minute(s).
+                  </p>
+                  {!recoveryMode && (
+                    <>
+                      <label htmlFor="factor-code">Six-digit authenticator-app code</label>
+                      <input
+                        id="factor-code"
+                        name="factorCode"
+                        type="text"
+                        inputMode="numeric"
+                        autoComplete="one-time-code"
+                        pattern="[0-9]{6}"
+                        maxLength={6}
+                        value={factorCode}
+                        onChange={(event) =>
+                          setFactorCode(event.target.value.replace(/\D/g, ""))
+                        }
+                        placeholder="000000"
+                        required
+                      />
                       <button
                         type="button"
-                        key={method.id}
-                        className={selectedFactor === method.id ? "is-selected" : ""}
-                        aria-pressed={selectedFactor === method.id}
-                        disabled={loading}
-                        onClick={() => handleSelectFactor(method.id)}
+                        className="auth-secondary-button"
+                        onClick={() => {
+                          setRecoveryMode(true);
+                          setFactorCode("");
+                          setError("");
+                        }}
                       >
-                        {method.label}
+                        Lost your authenticator? Use a recovery code
                       </button>
-                    ))}
-                  </fieldset>
-                  {selectedFactor === "passkey" ? (
-                    <button
-                      type="button"
-                      onClick={handlePasskeySignIn}
-                      disabled={loading || (factorCodeRequested && resendSeconds > 0)}
-                    >
-                      {loading ? "Waiting for passkey..." : "Continue with passkey"}
-                    </button>
-                  ) : (
+                    </>
+                  )}
+                  {recoveryMode && (
                     <>
-                      {(selectedFactor === "email" || selectedFactor === "sms") && (
-                        <button
-                          type="button"
-                          className="auth-secondary-button"
-                          onClick={handleSendFactorCode}
-                          disabled={loading}
-                        >
-                          {loading
-                            ? "Sending..."
-                            : factorCodeRequested && resendSeconds > 0
-                              ? `Resend in ${resendSeconds}s`
-                              : factorCodeRequested
-                                ? "Request a new code"
-                              : `Send ${selectedFactor === "sms" ? "text" : "email"} code`}
-                        </button>
-                      )}
-                      {(selectedFactor === "email" || selectedFactor === "sms") &&
-                        factorCodeRequested && (
-                          <p className="auth-password-hint" role="status">
-                            {factorCodeExpired
-                              ? "This code has expired. Request a new code to continue."
-                              : `A code was ${selectedFactor === "email" ? "queued for email delivery" : "sent"}. It expires in ${
-                                  Math.max(
-                                    0,
-                                    Math.ceil((factorCodeExpiresAt - currentTime) / 60000),
-                                  )
-                                } minute(s).`}
-                          </p>
-                        )}
-                      {(selectedFactor === "totp" ||
-                        selectedFactor === "recovery" ||
-                        factorCodeRequested) && (
-                        <>
-                          <label htmlFor="factor-code">
-                            {selectedFactor === "totp"
-                              ? "6-digit authenticator code"
-                              : selectedFactor === "recovery"
-                                ? "Recovery code"
-                                : "6-digit verification code"}
-                          </label>
-                          <input
-                            id="factor-code"
-                            name="factorCode"
-                            type="text"
-                            inputMode={selectedFactor === "recovery" ? "text" : "numeric"}
-                            autoComplete="one-time-code"
-                            pattern={selectedFactor === "recovery" ? undefined : "[0-9]{6}"}
-                            maxLength={selectedFactor === "recovery" ? 64 : 6}
-                            value={factorCode}
-                            onChange={(event) => setFactorCode(
-                              selectedFactor === "recovery"
-                                ? event.target.value
-                                : event.target.value.replace(/\D/g, ""),
-                            )}
-                            placeholder={selectedFactor === "recovery" ? "XXXX-XXXX-XXXX-XXXX" : "000000"}
-                            required
-                          />
-                        </>
-                      )}
+                      <label htmlFor="factor-code">Unused recovery code</label>
+                      <input
+                        id="factor-code"
+                        name="factorCode"
+                        type="text"
+                        autoComplete="one-time-code"
+                        maxLength={64}
+                        value={factorCode}
+                        onChange={(event) => setFactorCode(event.target.value)}
+                        placeholder="XXXX-XXXX-XXXX-XXXX"
+                        required
+                      />
+                      <button
+                        type="button"
+                        className="auth-secondary-button"
+                        onClick={() => {
+                          setRecoveryMode(false);
+                          setFactorCode("");
+                          setError("");
+                        }}
+                      >
+                        Return to authenticator code
+                      </button>
                     </>
                   )}
                 </>
               ) : (
                 <p className="auth-password-hint" role="status">
-                  Loading authenticator setup…
+                  Loading authenticator enrollment…
                 </p>
               )}
-              <button
-                type="submit"
-                disabled={
-                  loading ||
-                  (factorChallenge.setup && !factorSetup) ||
-                  ((selectedFactor === "email" || selectedFactor === "sms") &&
-                    (!factorCodeRequested || factorCodeExpired)) ||
-                  selectedFactor === "passkey"
-                }
-              >
-                {loading
-                  ? "Verifying..."
-                  : factorChallenge.setup
-                    ? "Enable two-factor sign-in"
-                    : "Verify and log in"}
-                {!loading && selectedFactor !== "passkey" && <span aria-hidden="true">→</span>}
-              </button>
-              {factorChallenge.setup &&
-                factorChallenge.totpSetupAvailable &&
-                factorChallenge.methods.some((method) => method.id === "email") && (
-                  <button
-                    type="button"
-                    className="auth-secondary-button"
-                    onClick={() => {
-                      setFactorChallenge((current) => ({ ...current, setup: false }));
-                      setFactorSetup(null);
-                      setSelectedFactor("email");
-                      setError("");
-                    }}
-                  >
-                    Use email verification instead
-                  </button>
-                )}
+              {!challengeExpired && (
+                <button
+                  type="submit"
+                  disabled={
+                    loading ||
+                    (factorChallenge.stage === "email_otp" && factorCodeExpired) ||
+                    (factorChallenge.stage === "authenticator_enrollment" &&
+                      !factorSetup)
+                  }
+                >
+                  {loading
+                    ? "Verifying..."
+                    : factorChallenge.stage === "email_otp"
+                      ? "Verify email and continue"
+                      : factorChallenge.stage === "authenticator_enrollment"
+                        ? "Enable authenticator and sign in"
+                        : recoveryMode
+                          ? "Verify recovery code"
+                          : "Verify authenticator and sign in"}
+                  {!loading && <span aria-hidden="true">→</span>}
+                </button>
+              )}
+              {challengeExpired && (
+                <button
+                  type="button"
+                  className="auth-secondary-button"
+                  onClick={() => {
+                    setFactorChallenge(null);
+                    setFactorSetup(null);
+                    setFactorCode("");
+                    setFactorCodeExpiresAt(null);
+                    setFactorResendAvailableAt(null);
+                    setChallengeExpiresAt(null);
+                    setRecoveryMode(false);
+                    setError("");
+                  }}
+                >
+                  Start sign-in again
+                </button>
+              )}
               <button
                 type="button"
                 className="auth-secondary-button"
                 onClick={() => {
                   setFactorChallenge(null);
                   setFactorSetup(null);
-                  setFactorCodeRequested(false);
                   setFactorCodeExpiresAt(null);
                   setFactorResendAvailableAt(null);
+                  setChallengeExpiresAt(null);
+                  setRecoveryMode(false);
                   setError("");
                 }}
               >

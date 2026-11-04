@@ -60,11 +60,13 @@ function Register() {
         role: formData.role,
       });
 
-      if (response.user?.role === "tenant") {
-        navigate("/login", { replace: true });
-      } else {
-        navigate("/login", { replace: true });
-      }
+      navigate("/login", {
+        replace: true,
+        state: {
+          registrationChallenge: response,
+          email: formData.email.trim(),
+        },
+      });
     } catch (err) {
       setError(err.message || "Registration failed. Please try again.");
     } finally {
@@ -98,7 +100,8 @@ function Register() {
           <span className="auth-card-kicker">Get started</span>
           <h1>Create your account</h1>
           <p className="auth-description">
-            Register as a landlord or a tenant to access the right workflow.
+            Register as a landlord or tenant, then verify your email and set
+            up an authenticator before accessing your account.
           </p>
 
           {error && (
@@ -182,7 +185,10 @@ function Register() {
           </form>
 
           <p className="auth-switch">
-            Already have an account? <Link to="/login">Log in</Link>
+            Already registered?{" "}
+            <Link to="/login" state={{ email: formData.email.trim() }}>
+              Sign in or resume setup
+            </Link>
           </p>
         </div>
       </div>

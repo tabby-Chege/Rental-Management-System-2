@@ -35,3 +35,6 @@ __pycache__/
 venv/
 .pytest_cache/
 .coverage
+# Local database dumps and migration backup copies
+/backend/backups/
+/backend/migrations/alembic/versions/*.before_*

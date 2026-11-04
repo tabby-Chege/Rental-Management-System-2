@@ -156,7 +156,7 @@ def test_document_upload_uses_local_private_storage_when_configured(
         },
         content_type="multipart/form-data",
     )
-    assert response.status_code == 201
+    assert response.status_code == 201, response.get_json()
     document = response.get_json()["document"]
     stored_document = db.session.get(TenantDocument, document["id"])
     stored_object = tmp_path / stored_document.object_key

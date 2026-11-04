@@ -48,7 +48,7 @@ def test_properties_require_authentication():
 
 
 def create_property(client, headers, name, city="Nairobi"):
-    return client.post(
+    response = client.post(
         "/api/properties",
         headers=headers,
         json={
@@ -58,11 +58,13 @@ def create_property(client, headers, name, city="Nairobi"):
             "state": "Nairobi",
         },
     )
+    assert response.status_code == 201, response.get_json()
+    return response
 
 
 def test_property_crud_and_owner_enforcement(client, world):
     created = create_property(client, world["landlord"], "Home")
-    assert created.status_code == 201
+    assert created.status_code == 201, created.get_json()
     prop = created.get_json()["property"]
     assert prop["id"]
     assert prop["owner_id"] == world["ids"]["landlord"]
@@ -86,30 +88,40 @@ def test_property_crud_and_owner_enforcement(client, world):
     assert client.get(prop_url, headers=world["landlord"]).status_code == 404
 
 
-def test_reservation_hold_cannot_be_configured_on_properties(client, world):
-    response = client.post(
-        "/api/properties",
-        headers=world["landlord"],
-        json={
-            "name": "Fixed deadline property",
-            "address": "1 Main Street",
-            "city": "Nairobi",
-            "reservation_hold_hours": 48,
-        },
-    )
-    assert response.status_code == 400
-    assert "fixed one-hour" in response.get_json()["error"]
-
-    created = create_property(client, world["landlord"], "Fixed deadline property")
+def test_reservation_hold_is_configurable_and_defaults_to_48_hours(client, world):
+    created = create_property(client, world["landlord"], "Configured hold")
     assert created.status_code == 201
     property_data = created.get_json()["property"]
-    assert "reservation_hold_hours" not in property_data
+    assert property_data["reservation_hold_hours"] == 48
+
     update = client.put(
         f"/api/properties/{property_data['id']}",
         headers=world["landlord"],
-        json={"reservation_hold_hours": 2},
+        json={"reservation_hold_hours": 12},
     )
-    assert update.status_code == 400
+    assert update.status_code == 200
+    assert update.get_json()["property"]["reservation_hold_hours"] == 12
+
+    custom = client.post(
+        "/api/properties",
+        headers=world["landlord"],
+        json={
+            "name": "Custom hold",
+            "address": "2 Main Street",
+            "city": "Nairobi",
+            "reservation_hold_hours": 24,
+        },
+    )
+    assert custom.status_code == 201
+    assert custom.get_json()["property"]["reservation_hold_hours"] == 24
+
+    for invalid_value in (0, 721, 1.5, True):
+        response = client.put(
+            f"/api/properties/{property_data['id']}",
+            headers=world["landlord"],
+            json={"reservation_hold_hours": invalid_value},
+        )
+        assert response.status_code == 400
 
 
 def test_property_pagination_and_search_are_user_scoped(client, world):
@@ -479,7 +491,7 @@ def test_registration_creates_non_admin_landlord(client):
 def test_expired_token_returns_session_message_without_creating_property(client, world):
     token = create_access_token(
         identity=str(world["ids"]["landlord"]),
-        expires_delta=timedelta(seconds=-1),
+        expires_delta=timedelta(seconds=-30),
     )
     response = client.post(
         "/api/properties",
@@ -585,7 +597,7 @@ def test_property_supports_international_address_currency_and_time_zone(client, 
             "currency": "USD",
         },
     )
-    assert created.status_code == 201
+    assert created.status_code == 201, created.get_json()
     prop = created.get_json()["property"]
     assert {
         key: prop[key]

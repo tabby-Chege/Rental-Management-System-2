@@ -1,12 +1,14 @@
 from datetime import date, datetime, timedelta, timezone
 
 import pytest
+from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 
 from server.extensions import db
 from server.models_application import Application
 from server.models_tenant import Tenant
 from server.models_unit_lease import Lease
+from server.reservations import process_reservations
 from tests.test_tenants import client, world  # noqa: F401 (shared fixtures)
 
 
@@ -15,6 +17,7 @@ def create_unit(
     headers,
     name="Application property",
     rent_amount=1200,
+    reservation_hold_hours=48,
 ):
     property_response = client.post(
         "/api/properties",
@@ -24,6 +27,7 @@ def create_unit(
             "address": "1 Main Street",
             "city": "Nairobi",
             "state": "Nairobi",
+            "reservation_hold_hours": reservation_hold_hours,
         },
     )
     assert property_response.status_code == 201
@@ -228,10 +232,14 @@ def test_payment_confirmation_creates_the_lease_after_reservation(client, world)
     )
 
 
-def test_approval_reservation_deadline_is_exactly_one_hour(client, world, monkeypatch):
+def test_approval_reservation_deadline_uses_property_configuration(
+    client, world, monkeypatch
+):
     fixed_now = datetime(2026, 10, 21, 12, 0, tzinfo=timezone.utc)
     monkeypatch.setattr("server.routes.applications.utc_now", lambda: fixed_now)
-    unit_id = create_unit(client, world["landlord"])
+    unit_id = create_unit(
+        client, world["landlord"], reservation_hold_hours=6
+    )
     application = apply(client, world["tenant"], unit_id).get_json()["application"]
 
     approval = client.patch(
@@ -243,7 +251,7 @@ def test_approval_reservation_deadline_is_exactly_one_hour(client, world, monkey
     assert approval.status_code == 200
     assert datetime.fromisoformat(
         approval.get_json()["application"]["payment_due_at"]
-    ) == fixed_now + timedelta(hours=1)
+    ) == fixed_now + timedelta(hours=6)
 
 
 def test_database_rejects_simultaneous_active_reservations_for_one_unit(
@@ -308,7 +316,9 @@ def test_tenant_cannot_decide_application_and_decline_does_not_create_tenant(
 def test_waitlist_offer_deadline_notifications_and_expiry(
     client, world, monkeypatch
 ):
-    unit_id = create_unit(client, world["landlord"])
+    unit_id = create_unit(
+        client, world["landlord"], reservation_hold_hours=6
+    )
     first = apply(client, world["tenant"], unit_id).get_json()["application"]
     second = apply(client, world["tenant2"], unit_id).get_json()["application"]
     assert second["status"] == "pending"
@@ -342,7 +352,7 @@ def test_waitlist_offer_deadline_notifications_and_expiry(
     ][0]
     assert offered["status"] == "offered"
     assert datetime.fromisoformat(offered["payment_due_at"]) == (
-        fixed_now + timedelta(hours=1)
+        fixed_now + timedelta(hours=6)
     )
 
     with client.application.app_context():
@@ -376,6 +386,67 @@ def test_waitlist_offer_deadline_notifications_and_expiry(
     )
     assert late_payment.status_code == 409
 
+
+
+def test_legacy_duplicate_expirations_promote_only_one_waitlisted_application(
+    client, world
+):
+    unit_id = create_unit(client, world["landlord"], reservation_hold_hours=6)
+
+    first = apply(client, world["tenant"], unit_id).get_json()["application"]
+    queued = apply(client, world["tenant2"], unit_id).get_json()["application"]
+
+    approval = client.patch(
+        f"/api/applications/{first['id']}",
+        headers=world["landlord"],
+        json={"status": "approved", "reason": "Application approved."},
+    )
+    assert approval.status_code == 200
+    assert queued["status"] == "pending"
+
+    fixed_now = datetime.now(timezone.utc) + timedelta(minutes=1)
+
+    with client.application.app_context():
+        # Simulate a legacy database that contains duplicate active reservations.
+        db.session.execute(
+            text("DROP INDEX uq_applications_active_reservation_unit")
+        )
+
+        original = db.session.get(Application, first["id"])
+        original.payment_due_at = fixed_now - timedelta(minutes=5)
+
+        historical_duplicate = Application(
+            unit_id=unit_id,
+            applicant_user_id=world["ids"]["tenant_user"],
+            move_in_date=date.today() + timedelta(days=30),
+            status="approved",
+            payment_due_at=fixed_now - timedelta(minutes=5),
+        )
+        db.session.add(historical_duplicate)
+        db.session.commit()
+
+        expired_count = process_reservations(
+            now=fixed_now,
+            unit_ids=[unit_id],
+        )
+
+        assert expired_count['expired'] == 2
+
+        applications = Application.query.filter_by(unit_id=unit_id).all()
+        offered = [item for item in applications if item.status == "offered"]
+        waitlisted = [
+            item for item in applications if item.status == "waitlisted"
+        ]
+
+        assert len(offered) == 1
+        assert offered[0].id == queued["id"]
+        assert len(waitlisted) == 0
+
+        active_reservations = Application.query.filter(
+            Application.unit_id == unit_id,
+            Application.status.in_(("approved", "offered")),
+        ).count()
+        assert active_reservations == 1
 
 def test_reservation_deadline_cannot_be_extended(client, world):
     unit_id = create_unit(client, world["landlord"])

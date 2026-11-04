@@ -4,7 +4,7 @@ from decimal import Decimal
 
 from server.extensions import db
 from server.models import Payment
-from server.models_application import Application
+from server.models_application import Application, ReservationNotification
 from server.models_payment import (
     EmailOutbox,
     PaymentAttempt,
@@ -192,6 +192,10 @@ def test_bank_transfer_confirms_reserved_application_once(client, world):
         assert Payment.query.filter_by(
             provider="bank_transfer", provider_reference="BANK-TRANSFER-001"
         ).count() == 1
+        assert ReservationNotification.query.filter_by(
+            application_id=application["id"],
+            notification_type="payment_confirmed",
+        ).count() == 1
 
     duplicate = client.post(
         f"/api/payments/attempts/{attempt['id']}/confirm",
@@ -279,7 +283,7 @@ def test_payment_after_reservation_expiry_is_refunded_and_promotes_waitlist(
         assert expired.lease_id is None
         assert promoted.status == "offered"
         assert promoted.payment_due_at.replace(tzinfo=timezone.utc) == (
-            fixed_now + timedelta(hours=1)
+            fixed_now + timedelta(hours=48)
         )
         assert Lease.query.filter_by(unit_id=unit_id).count() == 0
         assert Payment.query.filter_by(payment_type="reservation").count() == 0

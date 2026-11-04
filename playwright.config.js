@@ -8,6 +8,7 @@ const backendPython =
 
 export default defineConfig({
   testDir: "./e2e",
+  globalSetup: "./e2e/global-setup.js",
   fullyParallel: false,
   retries: process.env.CI ? 1 : 0,
   reporter: "list",

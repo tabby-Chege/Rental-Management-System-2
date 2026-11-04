@@ -5,7 +5,8 @@ from server.extensions import db
 from server.models_application import Application, ReservationNotification
 from server.models_unit_lease import Lease, Unit
 
-RESERVATION_WINDOW = timedelta(hours=1)
+DEFAULT_RESERVATION_HOLD_HOURS = 48
+MAX_RESERVATION_HOLD_HOURS = 720
 REMINDER_WINDOW = timedelta(minutes=15)
 RESERVATION_STATUSES = ("approved", "offered")
 
@@ -20,8 +21,14 @@ def as_utc(value):
     return value.astimezone(timezone.utc)
 
 
-def reservation_deadline(now=None):
-    return as_utc(now or utc_now()) + RESERVATION_WINDOW
+def reservation_deadline(now=None, hold_hours=DEFAULT_RESERVATION_HOLD_HOURS):
+    if (
+        isinstance(hold_hours, bool)
+        or not isinstance(hold_hours, int)
+        or not 1 <= hold_hours <= MAX_RESERVATION_HOLD_HOURS
+    ):
+        raise ValueError("Reservation hold hours must be between 1 and 720")
+    return as_utc(now or utc_now()) + timedelta(hours=hold_hours)
 
 
 def _event_key(application, notification_type, event_time):
@@ -121,6 +128,20 @@ def _expire_reservations(now, unit_ids=None, user_id=None):
                 )
             continue
 
+        # A unit must never receive a second active reservation offer.
+        # This also protects legacy databases containing historical
+        # duplicate approved reservations.
+        existing_reservation = (
+            Application.query.filter(
+                Application.unit_id == unit.id,
+                Application.status.in_(RESERVATION_STATUSES),
+            )
+            .with_for_update()
+            .first()
+        )
+        if existing_reservation:
+            continue
+
         next_application = (
             Application.query.filter_by(
                 unit_id=unit.id,
@@ -134,7 +155,9 @@ def _expire_reservations(now, unit_ids=None, user_id=None):
             continue
 
         next_application.status = "offered"
-        next_application.payment_due_at = reservation_deadline(now)
+        next_application.payment_due_at = reservation_deadline(
+            now, unit.property.reservation_hold_hours
+        )
         add_reservation_notification(
             next_application,
             "waitlist_offer",

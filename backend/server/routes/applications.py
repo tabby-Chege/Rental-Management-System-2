@@ -367,7 +367,9 @@ def decide_application(application_id):
     application.status = decision
     application.decision_reason = reason or None
     if decision == "approved":
-        application.payment_due_at = reservation_deadline(utc_now())
+        application.payment_due_at = reservation_deadline(
+            utc_now(), property_record.reservation_hold_hours
+        )
         waitlisted = Application.query.filter(
             Application.unit_id == unit.id,
             Application.id != application.id,
