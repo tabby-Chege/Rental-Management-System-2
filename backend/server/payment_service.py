@@ -573,12 +573,6 @@ def finalize_payment_attempt(attempt, provider_result):
                     "The unit was leased to another applicant.",
                     utc_now(),
                 )
-            add_reservation_notification(
-                application,
-                "payment_confirmed",
-                "Your reservation payment was confirmed and your lease has been created.",
-                utc_now(),
-            )
         add_reservation_notification(
             application,
             "payment_confirmed",

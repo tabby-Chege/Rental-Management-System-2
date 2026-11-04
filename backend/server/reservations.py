@@ -128,6 +128,20 @@ def _expire_reservations(now, unit_ids=None, user_id=None):
                 )
             continue
 
+        # A unit must never receive a second active reservation offer.
+        # This also protects legacy databases containing historical
+        # duplicate approved reservations.
+        existing_reservation = (
+            Application.query.filter(
+                Application.unit_id == unit.id,
+                Application.status.in_(RESERVATION_STATUSES),
+            )
+            .with_for_update()
+            .first()
+        )
+        if existing_reservation:
+            continue
+
         next_application = (
             Application.query.filter_by(
                 unit_id=unit.id,

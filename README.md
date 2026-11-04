@@ -37,7 +37,7 @@ Property Finder is a full-stack rental management application built by extending
 
 ### 1. Configure PostgreSQL
 
-Create a database named `rental_management` and a database user with permission to use it. Keep credentials out of source control.
+Create a uniquely named, empty local PostgreSQL development database, for example `rental_management_dev`, and a database user with permission to use it. Never use the protected `rental_management` database. Keep credentials out of source control.
 
 ### 2. Start the Flask API
 
@@ -63,7 +63,7 @@ pip install -r requirements.txt
 Create `backend/.env` from `backend/.env.example`, then set:
 
 ```env
-DATABASE_URL=postgresql+psycopg2://YOUR_USER:YOUR_PASSWORD@localhost:5432/rental_management
+DATABASE_URL=postgresql+psycopg2://YOUR_USER:YOUR_PASSWORD@localhost:5432/rental_management_dev
 JWT_SECRET_KEY=generate-a-random-secret-of-at-least-32-characters
 CORS_ORIGINS=http://localhost:5173,http://127.0.0.1:5173
 ```
@@ -93,20 +93,25 @@ Obtain SMTP values from your provider and keep them only in local environment co
 
 New accounts must use a password of at least 10 characters containing uppercase and lowercase letters, a number, and a symbol; passwords are limited to 72 UTF-8 bytes for bcrypt compatibility. Login is temporarily blocked for 15 minutes after five failed attempts in a 15-minute window. Access tokens expire after 15 minutes and refresh tokens rotate on use, expiring after 30 days.
 
-Database changes use the explicit, safety-gated migration profiles documented in
-[backend/migrations/profiles/README.md](./backend/migrations/profiles/README.md).
-Do not run `flask db upgrade`, `flask db stamp`, direct `alembic upgrade`, or
-commands targeting all migration heads. Stage 1 has created the runner and
-profile structure only; fresh and legacy profiles intentionally have no
-migrations yet.
+Database changes use the explicit, safety-gated migration profiles documented in [backend/migrations/profiles/README.md](./backend/migrations/profiles/README.md).
 
-Never target the original `rental_management` database. For approved work,
-select exactly one profile and confirm the exact name of a uniquely named
-disposable PostgreSQL database through `backend/migration_runner.py`. The
-runner reads the connection URL from the backend environment, verifies the
-database identity read-only, and refuses protected or ambiguous targets.
+Do not run `flask db upgrade`, `flask db stamp`, direct `alembic upgrade`, or commands targeting all migration heads.
 
-For a local development secret, generate a value with `python -c "import secrets; print(secrets.token_urlsafe(48))"` and set it only in `backend/.env`.
+The migration runner supports three profiles:
+
+* `fresh`: for a new, empty database.
+* `legacy`: for the exact reviewed legacy schema, following a successful migration rehearsal.
+* `historic`: for the preserved historical migration chain.
+
+For a new local development database, create the empty PostgreSQL database first, configure the backend environment, then run the fresh migration profile:
+
+```bash
+python migration_runner.py --profile fresh --confirm-database rental_management_dev upgrade head
+```
+
+Use the legacy profile only on a reviewed and rehearsed legacy database. Never target the protected `rental_management` database.
+
+For a new local development secret, generate a value with `python -c "import secrets; print(secrets.token_urlsafe(48))"` and set it only in `backend/.env`.
 
 ### 3. Start the React app
 

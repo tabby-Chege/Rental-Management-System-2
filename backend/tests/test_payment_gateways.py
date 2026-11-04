@@ -4,7 +4,7 @@ from decimal import Decimal
 
 from server.extensions import db
 from server.models import Payment
-from server.models_application import Application
+from server.models_application import Application, ReservationNotification
 from server.models_payment import (
     EmailOutbox,
     PaymentAttempt,
@@ -191,6 +191,10 @@ def test_bank_transfer_confirms_reserved_application_once(client, world):
         assert lease.end_date.isoformat() == application["lease_end_date"]
         assert Payment.query.filter_by(
             provider="bank_transfer", provider_reference="BANK-TRANSFER-001"
+        ).count() == 1
+        assert ReservationNotification.query.filter_by(
+            application_id=application["id"],
+            notification_type="payment_confirmed",
         ).count() == 1
 
     duplicate = client.post(
