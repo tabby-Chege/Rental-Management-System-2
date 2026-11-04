@@ -86,9 +86,6 @@ async function registerAndLogin(page, { email, name, role }) {
   await page.getByRole("button", { name: "Create account" }).click();
   await expect(page).toHaveURL(/\/login$/);
 
-  await page.getByLabel("Email address").fill(email);
-  await page.getByLabel("Password", { exact: true }).fill(password);
-  await page.getByRole("button", { name: "Log in" }).click();
   const authenticatorSecret = await completeLoginFactors(page, email);
   await expect(page).toHaveURL(
     role === "landlord" ? /\/manage\/properties$/ : /\/tenant\/details$/,
